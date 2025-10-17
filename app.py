@@ -493,7 +493,7 @@ def calculate_issue_stats_from_metadata(metadata_list):
 
     return {
         'total_issues': total_issues,
-        'resolved': resolved,
+        'resolved_issues': resolved,
         'resolved_rate': round(resolved_rate, 2),
     }
 
@@ -1596,7 +1596,7 @@ def get_leaderboard_dataframe():
             data.get('agent_name', 'Unknown'),
             data.get('website', 'N/A'),
             data.get('total_issues', 0),
-            data.get('resolved', 0),
+            data.get('resolved_issues', 0),
             data.get('resolved_rate', 0.0),
         ])
 
