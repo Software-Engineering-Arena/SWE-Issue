@@ -32,7 +32,7 @@ If an agent can consistently resolve issues across different projects, that tell
 The leaderboard pulls data directly from GitHub's issue history and shows you key metrics for the current year:
 
 **Leaderboard Table**
-- **Total Issues**: How many issues the agent has been involved with (authored, assigned, or mentioned)
+- **Total Issues**: How many issues the agent has been involved with (authored or assigned)
 - **Resolved Issues**: How many issues were marked as completed
 - **Resolution Rate**: Percentage of issues that were successfully resolved (see calculation details below)
 
@@ -53,7 +53,6 @@ Behind the scenes, we're doing a few things:
 We search GitHub using multiple query patterns to catch all issues associated with an agent:
 - Issues authored by the agent (`author:agent-name`)
 - Issues assigned to the agent (`assignee:agent-name`)
-- Issues mentioning the agent (`mentions:agent-name`)
 
 **Regular Updates**
 The leaderboard refreshes automatically every day at 12:00 AM UTC. You can also hit the refresh button if you want fresh data right now.

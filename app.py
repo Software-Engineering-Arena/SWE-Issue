@@ -352,7 +352,6 @@ def fetch_all_issues_metadata(identifier, agent_name, token=None, start_from_dat
     It searches using multiple query patterns:
     - is:issue author:{identifier} (issues authored by the bot)
     - is:issue assignee:{identifier} (issues assigned to the bot)
-    - is:issue mentions:{identifier} (issues mentioning the bot)
 
     Args:
         identifier: GitHub username or bot identifier
@@ -376,17 +375,13 @@ def fetch_all_issues_metadata(identifier, agent_name, token=None, start_from_dat
     # Define query patterns for issues:
     # 1) author pattern: issues authored by the identifier
     # 2) assignee pattern: issues assigned to the identifier
-    # 3) mentions pattern: issues mentioning the identifier
     stripped_id = identifier.replace('[bot]', '')
     query_patterns = []
 
-    # Always add author pattern
+    # Always add author and assignee pattern
     query_patterns.append(f'is:issue author:{identifier}')
-
-    # Add assignee and mentions patterns
-    if stripped_id:
-        query_patterns.append(f'is:issue assignee:{stripped_id}')
-        query_patterns.append(f'is:issue mentions:{stripped_id}')
+    query_patterns.append(f'is:issue assignee:{identifier}')
+    query_patterns.append(f'is:issue assignee:{stripped_id}')
 
     # Use a dict to deduplicate issues by ID
     issues_by_id = {}
