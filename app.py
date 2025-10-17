@@ -52,7 +52,7 @@ LEADERBOARD_REPO = "SWE-Arena/issue_leaderboard"
 ISSUE_METADATA_REPO = "SWE-Arena/issue_metadata"  # HuggingFace dataset for issue metadata
 
 LEADERBOARD_COLUMNS = [
-    ("Agent Name", "string"),
+    ("Agent Name", "markdown"),
     ("Organization", "string"),
     ("Total Issues", "number"),
     ("Resolved Issues", "number"),
@@ -1418,9 +1418,13 @@ def update_all_agents_incremental():
             # Calculate stats from metadata
             stats = calculate_issue_stats_from_metadata(agent_metadata)
 
+            # Format agent_name as markdown link if website is available
+            website = agent.get('website', '')
+            formatted_agent_name = f"[{agent_name}]({website})" if website else agent_name
+
             # Merge metadata with stats
             cache_dict[identifier] = {
-                'agent_name': agent_name,
+                'agent_name': formatted_agent_name,
                 'organization': agent.get('organization', 'Unknown'),
                 'github_identifier': identifier,
                 **stats
@@ -1468,8 +1472,12 @@ def construct_leaderboard_from_metadata():
         # Calculate stats
         stats = calculate_issue_stats_from_metadata(agent_metadata)
 
+        # Format agent_name as markdown link if website is available
+        website = agent.get('website', '')
+        formatted_agent_name = f"[{agent_name}]({website})" if website else agent_name
+
         cache_dict[identifier] = {
-            'agent_name': agent_name,
+            'agent_name': formatted_agent_name,
             'organization': agent.get('organization', 'Unknown'),
             'github_identifier': identifier,
             **stats
@@ -1774,6 +1782,9 @@ def submit_agent(identifier, agent_name, organization, description, website):
         # Calculate stats from metadata
         stats = calculate_issue_stats_from_metadata(metadata_list)
 
+        # Format agent_name as markdown link
+        formatted_agent_name = f"[{agent_name}]({website})" if website else agent_name
+
         # Load current leaderboard
         leaderboard_data = load_leaderboard_dataset()
         if not leaderboard_data:
@@ -1781,7 +1792,9 @@ def submit_agent(identifier, agent_name, organization, description, website):
 
         # Convert to dict for easy updating
         cache_dict = {entry['github_identifier']: entry for entry in leaderboard_data}
-        cache_dict[identifier] = {**submission, **stats}
+        # Create submission with formatted agent name for leaderboard
+        leaderboard_entry = {**submission, 'agent_name': formatted_agent_name, **stats}
+        cache_dict[identifier] = leaderboard_entry
 
         # Save to HuggingFace
         save_leaderboard_to_hf(cache_dict)
