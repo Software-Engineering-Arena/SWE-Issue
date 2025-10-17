@@ -739,13 +739,8 @@ def update_all_agents_incremental():
             all_year_metadata = load_issue_metadata_for_year(current_year)
             agent_metadata = [issue for issue in all_year_metadata if issue.get('agent_identifier') == identifier]
             stats = calculate_issue_stats_from_metadata(agent_metadata)
-
-            # Format agent_name as markdown link if website is available
-            website = agent.get('website', '')
-            formatted_agent_name = f"[{agent_name}]({website})" if website else agent_name
-
             cache_dict[identifier] = {
-                'agent_name': formatted_agent_name,
+                'agent_name': agent_name,
                 'organization': agent.get('organization', 'Unknown'),
                 'github_identifier': identifier,
                 **stats
