@@ -44,16 +44,14 @@ else:
     DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() in ('true', '1', 'yes')
 
 # In-memory cache for debug mode (data persists during session but NOT saved to HF)
-DEBUG_LEADERBOARD_CACHE = {}
 DEBUG_ISSUE_METADATA_CACHE = defaultdict(list)
 
 AGENTS_REPO = "SWE-Arena/swe_agents"  # HuggingFace dataset for agent metadata
-LEADERBOARD_REPO = "SWE-Arena/issue_leaderboard"
 ISSUE_METADATA_REPO = "SWE-Arena/issue_metadata"  # HuggingFace dataset for issue metadata
 
 LEADERBOARD_COLUMNS = [
     ("Agent Name", "string"),
-    ("Organization", "string"),
+    ("Website", "string"),
     ("Total Issues", "number"),
     ("Resolved Issues", "number"),
     ("Resolved Rate (%)", "number"),
@@ -1163,34 +1161,6 @@ def load_agents_from_hf():
         return None
 
 
-def load_leaderboard_dataset():
-    """Load leaderboard data from HuggingFace dataset for current year.
-    In debug mode, loads from in-memory cache if available."""
-    # In debug mode, check in-memory cache first
-    if DEBUG_MODE and DEBUG_LEADERBOARD_CACHE:
-        print(f"🐛 DEBUG MODE: Loading leaderboard from in-memory cache ({len(DEBUG_LEADERBOARD_CACHE)} entries)")
-        return list(DEBUG_LEADERBOARD_CACHE.values())
-
-    try:
-        year = datetime.now().year
-        filename = f"{year}.csv"
-
-        # Try to download the CSV file for current year
-        file_path = hf_hub_download(
-            repo_id=LEADERBOARD_REPO,
-            filename=filename,
-            repo_type="dataset"
-        )
-
-        # Load CSV into list of dicts
-        df = pd.read_csv(file_path)
-        data = df.to_dict('records')
-        print(f"✓ Loaded {len(data)} entries from {filename}")
-        return data
-
-    except Exception as e:
-        print(f"Could not load leaderboard dataset for year {datetime.now().year}: {str(e)}")
-        return None
 
 
 def get_hf_token():
@@ -1282,56 +1252,6 @@ def save_agent_to_hf(data):
         return False
 
 
-def save_leaderboard_to_hf(cache_dict):
-    """Save complete leaderboard to HuggingFace dataset as CSV.
-    In debug mode, saves to in-memory cache only."""
-    # Skip saving in debug mode - use in-memory cache instead
-    if DEBUG_MODE:
-        global DEBUG_LEADERBOARD_CACHE
-        # Filter out agents with zero total issues
-        filtered_cache_dict = {k: v for k, v in cache_dict.items() if v.get('total_issues', 0) > 0}
-        DEBUG_LEADERBOARD_CACHE = filtered_cache_dict.copy()
-        data_list = dict_to_cache(filtered_cache_dict)
-        print(f"🐛 DEBUG MODE: Saved to in-memory cache only ({len(data_list)} entries) - NOT saved to HuggingFace")
-        return True
-
-    try:
-        token = get_hf_token()
-        if not token:
-            raise Exception("No HuggingFace token found. Please set HF_TOKEN in your Space settings.")
-
-        # Filter out agents with zero total issues
-        filtered_cache_dict = {k: v for k, v in cache_dict.items() if v.get('total_issues', 0) > 0}
-        # Convert to DataFrame
-        data_list = dict_to_cache(filtered_cache_dict)
-        df = pd.DataFrame(data_list)
-
-        # Save to CSV with year as filename
-        year = datetime.now().year
-        filename = f"{year}.csv"
-        df.to_csv(filename, index=False)
-
-        try:
-            # Upload to HuggingFace
-            api = HfApi()
-            upload_with_retry(
-                api=api,
-                path_or_fileobj=filename,
-                path_in_repo=filename,
-                repo_id=LEADERBOARD_REPO,
-                repo_type="dataset",
-                token=token
-            )
-            print(f"✓ Saved leaderboard to HuggingFace as {filename} ({len(data_list)} entries)")
-            return True
-        finally:
-            # Always clean up local file, even if upload fails
-            if os.path.exists(filename):
-                os.remove(filename)
-
-    except Exception as e:
-        print(f"✗ Error saving leaderboard: {str(e)}")
-        return False
 
 
 # =============================================================================
@@ -1421,7 +1341,7 @@ def update_all_agents_incremental():
             # Merge metadata with stats
             cache_dict[identifier] = {
                 'agent_name': agent_name,
-                'organization': agent.get('organization', 'Unknown'),
+                'website': agent.get('website', 'N/A'),
                 'github_identifier': identifier,
                 **stats
             }
@@ -1470,7 +1390,7 @@ def construct_leaderboard_from_metadata():
 
         cache_dict[identifier] = {
             'agent_name': agent_name,
-            'organization': agent.get('organization', 'Unknown'),
+            'website': agent.get('website', 'N/A'),
             'github_identifier': identifier,
             **stats
         }
@@ -1481,7 +1401,7 @@ def construct_leaderboard_from_metadata():
 def initialize_data():
     """
     Initialize data on application startup.
-    Priority: 1) Leaderboard dataset ({year}.csv), 2) Issue metadata (if available), 3) Full GitHub mining
+    Constructs leaderboard from issue metadata.
 
     In DEBUG MODE:
     - If no data available, automatically mine up to 10 issues per query per agent
@@ -1489,24 +1409,14 @@ def initialize_data():
     """
     print("🚀 Initializing leaderboard data...")
 
-    # STEP 1: Try loading existing leaderboard CSV file for current year
-    current_year = datetime.now().year
-    print(f"📂 Checking for {current_year}.csv in {LEADERBOARD_REPO}...")
-    leaderboard_data = load_leaderboard_dataset()
-    if leaderboard_data:
-        print(f"✓ Initialized from leaderboard dataset ({current_year}.csv)")
-        return
-
-    # STEP 2: Try constructing from issue metadata (fast, memory-efficient)
-    print(f"📂 {current_year}.csv not found. Checking {ISSUE_METADATA_REPO} for existing data...")
+    # Try constructing from issue metadata (fast, memory-efficient)
+    print(f"📂 Checking {ISSUE_METADATA_REPO} for existing data...")
     try:
         cache_dict = construct_leaderboard_from_metadata()
         # Check if there's actually meaningful data (at least one agent with issues)
         has_data = any(entry.get('total_issues', 0) > 0 for entry in cache_dict.values())
         if cache_dict and has_data:
-            print(f"✓ Found existing issue metadata. Building leaderboard from {ISSUE_METADATA_REPO}...")
-            save_leaderboard_to_hf(cache_dict)
-            print("✓ Initialized from issue metadata")
+            print(f"✓ Found existing issue metadata. Leaderboard constructed from {ISSUE_METADATA_REPO}")
             return
         else:
             print(f"   No meaningful data found in {ISSUE_METADATA_REPO}")
@@ -1521,10 +1431,7 @@ def initialize_data():
             print(f"✓ Loaded {len(agents)} agents from HuggingFace")
             print("⛏️ Mining GitHub data in debug mode (limited to 10 issues per query)...")
             cache_dict = update_all_agents_incremental()
-            if cache_dict:
-                # In debug mode, this won't actually save to HF
-                save_leaderboard_to_hf(cache_dict)
-                print("✓ Debug mining complete (data NOT saved to HuggingFace)")
+            print("✓ Debug mining complete (data NOT saved to HuggingFace)")
             return
         else:
             print("⚠️ No agents found. Waiting for first submission...")
@@ -1536,8 +1443,6 @@ def initialize_data():
         print(f"✓ Loaded {len(agents)} agents from HuggingFace")
         print("⛏️ Mining GitHub data (this may take a while)...")
         cache_dict = update_all_agents_incremental()
-        if cache_dict:
-            save_leaderboard_to_hf(cache_dict)
         return
 
     # No data available
@@ -1670,26 +1575,26 @@ def create_monthly_metrics_plot():
 
 def get_leaderboard_dataframe():
     """
-    Load leaderboard data from HuggingFace and convert to pandas DataFrame for display.
-    Returns formatted DataFrame sorted by acceptance rate.
+    Construct leaderboard from issue metadata and convert to pandas DataFrame for display.
+    Returns formatted DataFrame sorted by resolved rate.
     """
-    # Load leaderboard data from HuggingFace
-    leaderboard_data = load_leaderboard_dataset()
+    # Construct leaderboard from metadata
+    cache_dict = construct_leaderboard_from_metadata()
 
-    if not leaderboard_data:
+    if not cache_dict:
         # Return empty DataFrame with correct columns if no data
         column_names = [col[0] for col in LEADERBOARD_COLUMNS]
         return pd.DataFrame(columns=column_names)
 
     rows = []
-    for data in leaderboard_data:
+    for data in cache_dict.values():
         # Filter out agents with zero total issues
         if data.get('total_issues', 0) == 0:
             continue
         # Only include display-relevant fields
         rows.append([
             data.get('agent_name', 'Unknown'),
-            data.get('organization', 'Unknown'),
+            data.get('website', 'N/A'),
             data.get('total_issues', 0),
             data.get('resolved', 0),
             data.get('resolved_rate', 0.0),
@@ -1774,19 +1679,7 @@ def submit_agent(identifier, agent_name, organization, description, website):
         # Calculate stats from metadata
         stats = calculate_issue_stats_from_metadata(metadata_list)
 
-        # Load current leaderboard
-        leaderboard_data = load_leaderboard_dataset()
-        if not leaderboard_data:
-            leaderboard_data = []
-
-        # Convert to dict for easy updating
-        cache_dict = {entry['github_identifier']: entry for entry in leaderboard_data}
-        cache_dict[identifier] = {**submission, **stats}
-
-        # Save to HuggingFace
-        save_leaderboard_to_hf(cache_dict)
-
-        return f"✅ Successfully submitted {agent_name}!", get_leaderboard_dataframe(), create_monthly_metrics_plot()
+        return f"✅ Successfully submitted {agent_name}! Stats: {stats['total_issues']} issues, {stats['resolved_rate']}% resolved", get_leaderboard_dataframe(), create_monthly_metrics_plot()
 
     except Exception as e:
         error_msg = f"⚠️ Submitted {agent_name}, but failed to fetch issue data: {str(e)}"
@@ -1853,15 +1746,6 @@ def daily_update_task():
         print(f"   Issues updated (closed/resolved): {total_updated}")
         print(f"{'='*80}")
 
-        # Reconstruct leaderboard from all stored metadata
-        print(f"\n📈 Rebuilding leaderboard from refreshed data...")
-        cache_dict = construct_leaderboard_from_metadata()
-
-        if cache_dict:
-            # Save leaderboard
-            save_leaderboard_to_hf(cache_dict)
-            print("✓ Leaderboard updated successfully")
-
         print(f"\n✅ Daily update completed at {datetime.now(timezone.utc).isoformat()}")
 
     except Exception as e:
@@ -1923,7 +1807,7 @@ with gr.Blocks(title="SWE Agent Issue Leaderboard", theme=gr.themes.Soft()) as a
             leaderboard_table = Leaderboard(
                 value=get_leaderboard_dataframe(),
                 datatype=LEADERBOARD_COLUMNS,
-                search_columns=["Agent Name", "Organization"],
+                search_columns=["Agent Name", "Website"],
                 filter_columns=["Resolved Rate (%)"]
             )
 

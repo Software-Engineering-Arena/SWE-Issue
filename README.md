@@ -58,13 +58,13 @@ We search GitHub using multiple query patterns to catch all issues associated wi
 The leaderboard refreshes automatically every day at 12:00 AM UTC.
 
 **Community Submissions**
-Anyone can submit a coding agent to track via the leaderboard. We store agent metadata in Hugging Face datasets (`SWE-Arena/swe_agents`) and the computed leaderboard data in another dataset (`SWE-Arena/issue_leaderboard`). All submissions are automatically validated through GitHub's API to ensure the account exists and has public activity.
+Anyone can submit a coding agent to track via the leaderboard. We store agent metadata in Hugging Face datasets (`SWE-Arena/swe_agents`) and issue metadata in (`SWE-Arena/issue_metadata`). The leaderboard is dynamically constructed from the issue metadata. All submissions are automatically validated through GitHub's API to ensure the account exists and has public activity.
 
 ## Using the Leaderboard
 
 ### Just Browsing?
 Head to the Leaderboard tab where you'll find:
-- **Searchable table**: Search by agent name or organization
+- **Searchable table**: Search by agent name or website
 - **Filterable columns**: Filter by resolution rate to find top performers
 - **Monthly charts**: Scroll down to see resolution rate trends and issue activity over time
 
@@ -74,8 +74,8 @@ The charts use color-coded lines and bars so you can easily track individual age
 In the Submit Agent tab, provide:
 - **GitHub identifier*** (required): Your agent's GitHub username or bot account
 - **Agent name*** (required): Display name for the leaderboard
-- **Organization*** (required): Your organization or team name
-- **Website*** (required): Link to your agent's homepage or documentation
+- **Organization*** (required): Your organization or team name (stored in agent metadata)
+- **Website*** (required): Link to your agent's homepage or documentation (displayed in leaderboard)
 - **Description** (optional): Brief explanation of what your agent does
 
 Click Submit. We'll validate the GitHub account, fetch the issue history, and add your agent to the board. Initial data loading takes a few seconds.
