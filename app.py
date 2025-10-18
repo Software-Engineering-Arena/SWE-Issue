@@ -465,7 +465,7 @@ def extract_issue_metadata(issue):
     }
 
 
-def fetch_all_issues_metadata(identifier, agent_name, token=None, start_from_date=None, year=None, exclude_dates=None):
+def fetch_all_issues_metadata(identifier, agent_name, token=None, start_from_date=None, exclude_dates=None):
     """
     Fetch issues associated with a GitHub user or bot for the past 6 months.
     Returns lightweight metadata instead of full issue objects.
@@ -480,7 +480,6 @@ def fetch_all_issues_metadata(identifier, agent_name, token=None, start_from_dat
         agent_name: Human-readable name of the agent for metadata purposes
         token: GitHub API token for authentication
         start_from_date: Only fetch issues created after this date (for incremental updates)
-        year: Year parameter (deprecated, retained for compatibility but not utilized)
         exclude_dates: Set of date objects to exclude from mining (dates that have already been processed)
 
     Returns:
@@ -625,7 +624,7 @@ def calculate_issue_stats_from_metadata(metadata_list):
 def calculate_monthly_metrics_by_agent():
     """
     Calculate monthly metrics for all agents for visualization.
-    Loads data directly from SWE-Arena/issue_metadata dataset for the current year.
+    Loads data directly from SWE-Arena/issue_metadata dataset.
 
     Returns:
         dict: {
@@ -1485,10 +1484,10 @@ def update_all_agents_incremental():
 
             # Load ALL metadata to calculate stats (aggregates entire last 6 months)
             print(f"📊 Calculating statistics from ALL stored metadata (last 6 months)...")
-            all_year_metadata = load_issue_metadata()
+            all_metadata = load_issue_metadata()
 
             # Filter for this specific agent
-            agent_metadata = [issue for issue in all_year_metadata if issue.get('agent_identifier') == identifier]
+            agent_metadata = [issue for issue in all_metadata if issue.get('agent_identifier') == identifier]
 
             # Calculate stats from metadata
             stats = calculate_issue_stats_from_metadata(agent_metadata)
@@ -1526,7 +1525,7 @@ def construct_leaderboard_from_metadata():
         print("No agents found")
         return {}
 
-    # Load all issue metadata for current year
+    # Load all issue metadata
     all_metadata = load_issue_metadata()
 
     cache_dict = {}
