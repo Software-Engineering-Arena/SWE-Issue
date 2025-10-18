@@ -48,6 +48,7 @@ DEBUG_ISSUE_METADATA_CACHE = defaultdict(list)
 
 AGENTS_REPO = "SWE-Arena/swe_agents"  # HuggingFace dataset for agent metadata
 ISSUE_METADATA_REPO = "SWE-Arena/issue_metadata"  # HuggingFace dataset for issue metadata
+LEADERBOARD_TIME_FRAME_DAYS = 180  # Time frame for leaderboard (past 6 months)
 
 LEADERBOARD_COLUMNS = [
     ("Agent Name", "string"),
@@ -639,17 +640,14 @@ def calculate_monthly_metrics_by_agent():
             }
         }
     """
-    # Get current year for loading metadata
-    current_year = datetime.now().year
-
     # Load ALL agents from HuggingFace agents repo
     agents = load_agents_from_hf()
 
     # Create mapping from agent_identifier to agent_name
     identifier_to_name = {agent.get('github_identifier'): agent.get('agent_name') for agent in agents if agent.get('github_identifier')}
 
-    # Load all issue metadata for current year from issue_metadata dataset
-    all_metadata = load_issue_metadata_for_year(current_year)
+    # Load all issue metadata from issue_metadata dataset
+    all_metadata = load_issue_metadata()
 
     if not all_metadata:
         return {'agents': [], 'months': [], 'data': {}}
@@ -830,27 +828,41 @@ def save_issue_metadata_to_hf(metadata_list, agent_identifier):
         return False
 
 
-def load_issue_metadata_for_year(year):
+def load_issue_metadata():
     """
-    Load all issue metadata for a specific year from HuggingFace.
-    Scans all agent folders and loads daily files matching the year.
+    Load issue metadata from the last LEADERBOARD_TIME_FRAME_DAYS only.
     In debug mode, loads from in-memory cache if available.
 
     Structure: [agent_identifier]/YYYY.MM.DD.jsonl
 
     Returns:
         List of dictionaries with 'agent_identifier' added to each issue metadata.
+        Only includes issues within the last LEADERBOARD_TIME_FRAME_DAYS.
     """
+    # Calculate cutoff date based on LEADERBOARD_TIME_FRAME_DAYS
+    current_time = datetime.now(timezone.utc)
+    cutoff_date = current_time - timedelta(days=LEADERBOARD_TIME_FRAME_DAYS)
+
     # In debug mode, check in-memory cache first
     if DEBUG_MODE and DEBUG_ISSUE_METADATA_CACHE:
         all_metadata = []
         for agent_identifier, metadata_list in DEBUG_ISSUE_METADATA_CACHE.items():
             for issue_meta in metadata_list:
+                # Filter by time frame in debug mode too
+                created_at = issue_meta.get('created_at')
+                if created_at:
+                    try:
+                        dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                        if dt < cutoff_date:
+                            continue  # Skip issues outside time frame
+                    except Exception:
+                        pass  # Keep issues with unparseable dates
+
                 issue_with_agent = issue_meta.copy()
                 issue_with_agent['agent_identifier'] = agent_identifier
                 all_metadata.append(issue_with_agent)
         if all_metadata:
-            print(f"🐛 DEBUG MODE: Loading issue metadata from in-memory cache ({len(all_metadata)} issues)")
+            print(f"🐛 DEBUG MODE: Loading issue metadata from in-memory cache from last {LEADERBOARD_TIME_FRAME_DAYS} days ({len(all_metadata)} issues)")
             return all_metadata
 
     try:
@@ -860,22 +872,33 @@ def load_issue_metadata_for_year(year):
         # List all files in the repository
         files = api.list_repo_files(repo_id=ISSUE_METADATA_REPO, repo_type="dataset")
 
-        # Filter for files matching the year pattern: [agent_identifier]/YYYY.MM.DD.jsonl
-        # Extract year from filename
-        year_str = str(year)
-        year_files = []
+        # Filter for files within the time frame: [agent_identifier]/YYYY.MM.DD.jsonl
+        # Parse date from filename and only include files within LEADERBOARD_TIME_FRAME_DAYS
+        time_frame_files = []
         for f in files:
             if f.endswith('.jsonl'):
                 parts = f.split('/')
                 if len(parts) == 2:  # [agent_identifier]/YYYY.MM.DD.jsonl
                     filename = parts[1]
-                    if filename.startswith(year_str + '.'):
-                        year_files.append(f)
+                    try:
+                        # Extract date from filename: YYYY.MM.DD.jsonl
+                        date_part = filename.replace('.jsonl', '')  # Get YYYY.MM.DD
+                        date_components = date_part.split('.')
+                        if len(date_components) == 3:
+                            file_year, file_month, file_day = map(int, date_components)
+                            file_date = datetime(file_year, file_month, file_day, tzinfo=timezone.utc)
 
-        print(f"📥 Loading issue metadata for {year} ({len(year_files)} daily files across all agents)...")
+                            # Only include files within the time frame
+                            if file_date >= cutoff_date:
+                                time_frame_files.append(f)
+                    except Exception:
+                        # Skip files with unparseable dates
+                        continue
+
+        print(f"📥 Loading issue metadata from last {LEADERBOARD_TIME_FRAME_DAYS} days ({len(time_frame_files)} daily files across all agents)...")
 
         all_metadata = []
-        for filename in year_files:
+        for filename in time_frame_files:
             try:
                 # Extract agent_identifier from path (first part)
                 # Format: agent_identifier/YYYY.MM.DD.jsonl
@@ -894,20 +917,30 @@ def load_issue_metadata_for_year(year):
                 )
                 day_metadata = load_jsonl(file_path)
 
-                # Add agent_identifier to each issue metadata for processing
+                # Add agent_identifier and filter by date as a double-check
                 for issue_meta in day_metadata:
-                    issue_meta['agent_identifier'] = agent_identifier
+                    # Validate issue date against cutoff
+                    created_at = issue_meta.get('created_at')
+                    if created_at:
+                        try:
+                            dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                            if dt < cutoff_date:
+                                continue  # Skip issues outside time frame
+                        except Exception:
+                            pass  # Keep issues with unparseable dates
 
-                all_metadata.extend(day_metadata)
+                    issue_meta['agent_identifier'] = agent_identifier
+                    all_metadata.append(issue_meta)
+
                 print(f"   ✓ Loaded {len(day_metadata)} issues from {filename}")
             except Exception as e:
                 print(f"   Warning: Could not load {filename}: {str(e)}")
 
-        print(f"✓ Loaded {len(all_metadata)} total issues for {year}")
+        print(f"✓ Loaded {len(all_metadata)} total issues from last {LEADERBOARD_TIME_FRAME_DAYS} days")
         return all_metadata
 
     except Exception as e:
-        print(f"✗ Error loading issue metadata for {year}: {str(e)}")
+        print(f"✗ Error loading issue metadata from last {LEADERBOARD_TIME_FRAME_DAYS} days: {str(e)}")
         return []
 
 
@@ -1396,7 +1429,6 @@ def update_all_agents_incremental():
     Returns dictionary of all agent data with current stats.
     """
     token = get_github_token()
-    current_year = datetime.now().year
 
     # Load agent metadata from HuggingFace
     agents = load_agents_from_hf()
@@ -1451,9 +1483,9 @@ def update_all_agents_incremental():
             else:
                 print(f"   No new issues to save")
 
-            # Load ALL metadata for current year to calculate stats (aggregates entire last 6 months)
+            # Load ALL metadata to calculate stats (aggregates entire last 6 months)
             print(f"📊 Calculating statistics from ALL stored metadata (last 6 months)...")
-            all_year_metadata = load_issue_metadata_for_year(current_year)
+            all_year_metadata = load_issue_metadata()
 
             # Filter for this specific agent
             agent_metadata = [issue for issue in all_year_metadata if issue.get('agent_identifier') == identifier]
@@ -1488,8 +1520,6 @@ def construct_leaderboard_from_metadata():
     Returns dictionary of agent stats.
     """
     print("📊 Constructing leaderboard from issue metadata...")
-    current_year = datetime.now().year
-
     # Load agents
     agents = load_agents_from_hf()
     if not agents:
@@ -1497,7 +1527,7 @@ def construct_leaderboard_from_metadata():
         return {}
 
     # Load all issue metadata for current year
-    all_metadata = load_issue_metadata_for_year(current_year)
+    all_metadata = load_issue_metadata()
 
     cache_dict = {}
 
