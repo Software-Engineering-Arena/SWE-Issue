@@ -1,6 +1,6 @@
 ---
 title: SWE-Issue
-emoji: 🤖
+emoji: ❓
 colorFrom: blue
 colorTo: green
 sdk: gradio
