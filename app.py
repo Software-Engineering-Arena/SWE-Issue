@@ -1456,14 +1456,14 @@ def update_all_agents_incremental():
 
             if already_mined_dates:
                 print(f"📅 Found {len(already_mined_dates)} already-mined dates")
-                print(f"   Skipping these dates and fetching only new data...")
-                # Fetch only issues from dates not yet mined
+                print(f"   Re-mining ALL dates to ensure metadata is up-to-date...")
+                # ALWAYS re-mine all dates to catch metadata changes (e.g., resolved → unresolved)
                 new_metadata = fetch_all_issues_metadata(
                     identifier,
                     agent_name,
                     token,
                     start_from_date=None,  # Use full 6-month range
-                    exclude_dates=already_mined_dates  # But exclude already-mined dates
+                    exclude_dates=None  # Re-mine everything, don't exclude any dates
                 )
             else:
                 print(f"📅 No existing data found. Mining everything from scratch...")
@@ -1847,61 +1847,27 @@ def submit_agent(identifier, agent_name, organization, description, website):
 
 def daily_update_task():
     """
-    Daily scheduled task (runs at 12:00 AM UTC) for smart issue updates.
+    Daily scheduled task (runs at 12:00 AM UTC) for regular issue mining.
 
     Strategy:
-    1. For each agent, refresh open issues from last 6 months
-    2. Skip issues that are already closed/resolved (no API calls)
-    3. Only fetch status for open issues to check if they've been closed/resolved
-    4. Update leaderboard with refreshed data
+    1. Re-mine ALL issues within the 6-month window for each agent
+    2. This ensures metadata is always fresh (catches resolved → unresolved changes)
+    3. Update leaderboard with completely refreshed data
 
-    This is much more efficient than fetching all issues every time.
+    This ensures no stale metadata exists in the system.
     """
     print(f"\n{'='*80}")
-    print(f"🕛 Daily update started at {datetime.now(timezone.utc).isoformat()}")
+    print(f"🕛 Daily regular mining started at {datetime.now(timezone.utc).isoformat()}")
     print(f"{'='*80}")
 
     try:
-        token = get_github_token()
+        # Use the incremental update function which now re-mines everything
+        update_all_agents_incremental()
 
-        # Load all agents
-        agents = load_agents_from_hf()
-        if not agents:
-            print("No agents found")
-            return
-
-        print(f"📋 Processing {len(agents)} agents...")
-
-        total_checked = 0
-        total_updated = 0
-
-        # Refresh open issues for each agent (last 6 months)
-        for agent in agents:
-            identifier = agent.get('github_identifier')
-            agent_name = agent.get('agent_name', 'Unknown')
-
-            if not identifier:
-                continue
-
-            print(f"\n{'='*60}")
-            print(f"Processing: {agent_name} ({identifier})")
-            print(f"{'='*60}")
-
-            # Refresh open issues from last 6 months
-            checked, updated = refresh_open_issues_for_agent(identifier, token)
-            total_checked += checked
-            total_updated += updated
-
-        print(f"\n{'='*80}")
-        print(f"📊 Refresh Summary:")
-        print(f"   Total open issues checked: {total_checked}")
-        print(f"   Issues updated (closed/resolved): {total_updated}")
-        print(f"{'='*80}")
-
-        print(f"\n✅ Daily update completed at {datetime.now(timezone.utc).isoformat()}")
+        print(f"\n✅ Daily regular mining completed at {datetime.now(timezone.utc).isoformat()}")
 
     except Exception as e:
-        print(f"✗ Daily update failed: {str(e)}")
+        print(f"✗ Daily regular mining failed: {str(e)}")
         import traceback
         traceback.print_exc()
 
@@ -1934,17 +1900,17 @@ else:
 
 initialize_data()
 
-# Start APScheduler for daily updates at 12:00 AM UTC
+# Start APScheduler for daily regular issue mining at 12:00 AM UTC
 scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(
     daily_update_task,
     trigger=CronTrigger(hour=0, minute=0),  # 12:00 AM UTC daily
-    id='daily_issue_refresh',
-    name='Daily Issue Status Refresh',
+    id='daily_regular_mining',
+    name='Daily Regular Issue Mining',
     replace_existing=True
 )
 scheduler.start()
-print("✓ Scheduler started: Daily updates at 12:00 AM UTC")
+print("✓ Scheduler started: Daily regular issue mining at 12:00 AM UTC")
 
 # Create Gradio interface
 with gr.Blocks(title="SWE Agent Issue Leaderboard", theme=gr.themes.Soft()) as app:
