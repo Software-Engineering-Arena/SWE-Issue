@@ -465,131 +465,6 @@ def extract_issue_metadata(issue):
     }
 
 
-def fetch_all_issues_metadata(identifier, agent_name, token=None, start_from_date=None, exclude_dates=None):
-    """
-    Fetch issues associated with a GitHub user or bot for the past 6 months.
-    Returns lightweight metadata instead of full issue objects.
-
-    This function employs time-based partitioning to navigate GitHub's 1000-result limit per query.
-    It searches using multiple query patterns:
-    - is:issue author:{identifier} (issues authored by the bot)
-    - is:issue assignee:{identifier} (issues assigned to the bot)
-
-    Args:
-        identifier: GitHub username or bot identifier
-        agent_name: Human-readable name of the agent for metadata purposes
-        token: GitHub API token for authentication
-        start_from_date: Only fetch issues created after this date (for incremental updates)
-        exclude_dates: Set of date objects to exclude from mining (dates that have already been processed)
-
-    Returns:
-        List of dictionaries containing minimal issue metadata
-    """
-    headers = {'Authorization': f'token {token}'} if token else {}
-
-    # Debug mode: limit issue retrieval for testing
-    debug_limit_per_pattern = 10 if DEBUG_MODE else None
-
-    if DEBUG_MODE:
-        print(f"\n🐛 DEBUG MODE ENABLED: Limiting to {debug_limit_per_pattern} issues per query pattern")
-
-    # Define query patterns for issues:
-    # 1) author pattern: issues authored by the identifier
-    # 2) assignee pattern: issues assigned to the identifier
-    stripped_id = identifier.replace('[bot]', '')
-    query_patterns = []
-
-    # Always add author and assignee pattern
-    query_patterns.append(f'is:issue author:{identifier}')
-    query_patterns.append(f'is:issue assignee:{identifier}')
-    query_patterns.append(f'is:issue assignee:{stripped_id}')
-
-    # Use a dict to deduplicate issues by ID
-    issues_by_id = {}
-
-    # Define time range: past 6 months only (or from start_from_date if specified)
-    current_time = datetime.now(timezone.utc)
-    six_months_ago = current_time - timedelta(days=180)  # ~6 months
-
-    if start_from_date:
-        # Use start_from_date but ensure it's not older than 6 months
-        start_date = max(start_from_date, six_months_ago)
-    else:
-        start_date = six_months_ago
-
-    # End date is current time
-    end_date = current_time
-
-    for query_pattern in query_patterns:
-        print(f"\n🔍 Searching with query: {query_pattern}")
-        print(f"   Time range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
-
-        pattern_start_time = time.time()
-        initial_count = len(issues_by_id)
-
-        # Fetch with time partitioning
-        issues_found = fetch_issues_with_time_partition(
-            query_pattern,
-            start_date,
-            end_date,
-            headers,
-            issues_by_id,
-            debug_limit_per_pattern
-        )
-
-        pattern_duration = time.time() - pattern_start_time
-        new_issues = len(issues_by_id) - initial_count
-
-        print(f"   ✓ Pattern complete: {new_issues} new issues found ({issues_found} total fetched, {len(issues_by_id) - initial_count - (issues_found - new_issues)} duplicates)")
-        print(f"   ⏱️ Time taken: {pattern_duration:.1f} seconds")
-
-        # Delay between different query patterns (shorter in debug mode)
-        time.sleep(0.2 if DEBUG_MODE else 1.0)
-
-    # Convert to lightweight metadata
-    all_issues = list(issues_by_id.values())
-
-    # Filter out issues from excluded dates if specified
-    if exclude_dates:
-        filtered_issues = []
-        excluded_count = 0
-        for issue in all_issues:
-            created_at = issue.get('created_at')
-            if created_at:
-                try:
-                    dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                    issue_date = dt.date()
-                    if issue_date not in exclude_dates:
-                        filtered_issues.append(issue)
-                    else:
-                        excluded_count += 1
-                except Exception:
-                    filtered_issues.append(issue)  # Keep issues with unparseable dates
-            else:
-                filtered_issues.append(issue)  # Keep issues without created_at
-
-        if excluded_count > 0:
-            print(f"   ⏭️ Skipped {excluded_count} issues from already-mined dates")
-        all_issues = filtered_issues
-
-    if DEBUG_MODE:
-        print(f"\n✅ COMPLETE (DEBUG MODE): Found {len(all_issues)} unique issues for {identifier}")
-        print(f"   Note: In production mode, this would fetch ALL issues")
-    else:
-        print(f"\n✅ COMPLETE: Found {len(all_issues)} unique issues for {identifier}")
-    print(f"📦 Extracting minimal metadata...")
-
-    metadata_list = [extract_issue_metadata(issue) for issue in all_issues]
-
-    # Calculate memory savings
-    import sys
-    original_size = sys.getsizeof(str(all_issues))
-    metadata_size = sys.getsizeof(str(metadata_list))
-    savings_pct = ((original_size - metadata_size) / original_size * 100) if original_size > 0 else 0
-
-    print(f"💾 Memory efficiency: {original_size // 1024}KB → {metadata_size // 1024}KB (saved {savings_pct:.1f}%)")
-
-    return metadata_list
 
 
 def calculate_issue_stats_from_metadata(metadata_list):
@@ -1057,59 +932,6 @@ def get_daily_files_last_n_months(agent_identifier, n_months=6):
         return []
 
 
-def get_already_mined_dates(agent_identifier, n_months=6):
-    """
-    Get set of dates that have already been mined for an agent.
-
-    Args:
-        agent_identifier: GitHub identifier of the agent
-        n_months: Number of months to look back (default: 6)
-
-    Returns:
-        Set of date objects (datetime.date) that already have data files
-    """
-    try:
-        api = HfApi()
-
-        # Calculate date range
-        today = datetime.now(timezone.utc)
-        n_months_ago = today - timedelta(days=30 * n_months)
-
-        # List all files in the repository
-        files = api.list_repo_files(repo_id=ISSUE_METADATA_REPO, repo_type="dataset")
-
-        # Filter for files in this agent's folder
-        agent_pattern = f"{agent_identifier}/"
-        agent_files = [f for f in files if f.startswith(agent_pattern) and f.endswith('.jsonl')]
-
-        mined_dates = set()
-        for filename in agent_files:
-            try:
-                # Extract date from filename: [agent_identifier]/YYYY.MM.DD.jsonl
-                parts = filename.split('/')
-                if len(parts) != 2:
-                    continue
-
-                date_part = parts[1].replace('.jsonl', '')  # Get YYYY.MM.DD
-                date_components = date_part.split('.')
-                if len(date_components) != 3:
-                    continue
-
-                file_year, file_month, file_day = map(int, date_components)
-                file_date = datetime(file_year, file_month, file_day, tzinfo=timezone.utc).date()
-
-                # Only include dates within the last n_months
-                if n_months_ago.date() <= file_date <= today.date():
-                    mined_dates.add(file_date)
-            except Exception as e:
-                print(f"   Warning: Could not parse date from filename {filename}: {e}")
-                continue
-
-        return mined_dates
-
-    except Exception as e:
-        print(f"   Warning: Could not get already-mined dates for {agent_identifier}: {str(e)}")
-        return set()
 
 
 def fetch_issue_current_status(issue_url, token):
@@ -1413,102 +1235,167 @@ def save_agent_to_hf(data):
 # DATA MANAGEMENT
 # =============================================================================
 
-def update_all_agents_incremental():
+def fetch_new_issues_for_agent(agent_identifier, token, query_patterns=None):
     """
-    Memory-efficient incremental update of issue statistics for all agents.
+    Fetch and save new issues for an agent from yesterday 12am UTC to today 12am UTC.
 
-    Strategy:
-    1. For each agent, load existing data from SWE-Arena/issue_metadata
-    2. Identify already-mined dates (based on filename: YYYY.MM.DD.jsonl)
-    3. Only fetch issues from dates that haven't been mined yet (within last 6 months)
-    4. If no data exists at all, mine everything from scratch
-    5. Store minimal metadata (not full issue objects) to avoid storage limits
-    6. Construct leaderboard from ALL stored metadata (last 6 months)
+    Args:
+        agent_identifier: GitHub identifier of the agent
+        token: GitHub API token
+        query_patterns: List of query patterns to search (if None, uses default)
 
-    Returns dictionary of all agent data with current stats.
+    Returns:
+        Number of new issues found and saved
     """
-    token = get_github_token()
+    if not query_patterns:
+        query_patterns = [
+            'label:good-first-issue',
+            'label:bug',
+            'label:enhancement',
+            'label:documentation',
+        ]
 
-    # Load agent metadata from HuggingFace
-    agents = load_agents_from_hf()
-    if not agents:
-        print("No agents found in HuggingFace dataset")
-        return {}
+    # Calculate time range: yesterday 12am UTC to today 12am UTC
+    now_utc = datetime.now(timezone.utc)
+    today_midnight = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_midnight = today_midnight - timedelta(days=1)
 
-    cache_dict = {}
+    headers = {'Authorization': f'token {token}'} if token else {}
 
-    # Update each agent
-    for agent in agents:
-        identifier = agent.get('github_identifier')
-        agent_name = agent.get('agent_name', 'Unknown')
+    print(f"\n  📥 Fetching new issues for {agent_identifier}...")
+    print(f"     Time range: {yesterday_midnight.isoformat()} to {today_midnight.isoformat()}")
 
-        if not identifier:
-            print(f"Warning: Skipping agent without identifier: {agent}")
-            continue
+    total_new_issues = 0
+    issues_by_id = {}
 
+    for pattern in query_patterns:
         try:
-            print(f"\n{'='*80}")
-            print(f"Processing: {agent_name} ({identifier})")
-            print(f"{'='*80}")
-
-            # Get already-mined dates for this agent (last 6 months)
-            already_mined_dates = get_already_mined_dates(identifier, n_months=6)
-
-            if already_mined_dates:
-                print(f"📅 Found {len(already_mined_dates)} already-mined dates")
-                print(f"   Re-mining ALL dates to ensure metadata is up-to-date...")
-                # ALWAYS re-mine all dates to catch metadata changes (e.g., resolved → unresolved)
-                new_metadata = fetch_all_issues_metadata(
-                    identifier,
-                    agent_name,
-                    token,
-                    start_from_date=None,  # Use full 6-month range
-                    exclude_dates=None  # Re-mine everything, don't exclude any dates
-                )
-            else:
-                print(f"📅 No existing data found. Mining everything from scratch...")
-                # Mine everything from scratch (full 6-month range)
-                new_metadata = fetch_all_issues_metadata(
-                    identifier,
-                    agent_name,
-                    token,
-                    start_from_date=None
-                )
-
-            if new_metadata:
-                # Save new metadata to HuggingFace (organized by agent_identifier/YYYY.MM.DD.jsonl)
-                print(f"💾 Saving {len(new_metadata)} new issue records...")
-                save_issue_metadata_to_hf(new_metadata, identifier)
-            else:
-                print(f"   No new issues to save")
-
-            # Load ALL metadata to calculate stats (aggregates entire last 6 months)
-            print(f"📊 Calculating statistics from ALL stored metadata (last 6 months)...")
-            all_metadata = load_issue_metadata()
-
-            # Filter for this specific agent
-            agent_metadata = [issue for issue in all_metadata if issue.get('agent_identifier') == identifier]
-
-            # Calculate stats from metadata
-            stats = calculate_issue_stats_from_metadata(agent_metadata)
-
-            # Merge metadata with stats
-            cache_dict[identifier] = {
-                'agent_name': agent_name,
-                'website': agent.get('website', 'N/A'),
-                'github_identifier': identifier,
-                **stats
-            }
-
-            print(f"✓ Updated {identifier}: {stats['total_issues']} issues, {stats['resolved_rate']}% resolved")
+            base_query = f'author:{agent_identifier} {pattern}'
+            
+            count = fetch_issues_with_time_partition(
+                base_query,
+                yesterday_midnight,
+                today_midnight,
+                headers,
+                issues_by_id,
+                debug_limit=10 if DEBUG_MODE else None,
+                depth=0
+            )
+            total_new_issues += count
 
         except Exception as e:
-            print(f"✗ Error updating {identifier}: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            print(f"     ⚠️ Error fetching pattern '{pattern}': {str(e)}")
             continue
 
-    return cache_dict
+    # Extract metadata from fetched issues
+    if issues_by_id:
+        metadata_list = [extract_issue_metadata(issue) for issue in issues_by_id.values()]
+        
+        # Save to HuggingFace
+        success = save_issue_metadata_to_hf(metadata_list, agent_identifier)
+        
+        if success:
+            print(f"  ✓ Saved {len(metadata_list)} new issues for {agent_identifier}")
+        else:
+            print(f"  ✗ Failed to save issues for {agent_identifier}")
+
+    return total_new_issues
+
+
+def update_all_agents_incremental():
+    """
+    Daily incremental update that:
+    1. Refreshes all open issues from the last (LEADERBOARD_TIME_FRAME_DAYS - 1) days
+       to check if they've been closed
+    2. Fetches and adds new issues from yesterday 12am UTC to today 12am UTC
+
+    Runs daily at 12:00 AM UTC as a scheduled task.
+    """
+    print(f"\n{'='*80}")
+    print(f"🕛 Daily incremental mining started at {datetime.now(timezone.utc).isoformat()}")
+    print(f"{'='*80}")
+
+    try:
+        # Get GitHub token
+        token = get_github_token()
+
+        # Load agent metadata from HuggingFace
+        agents = load_agents_from_hf()
+        if not agents:
+            print("No agents found in HuggingFace dataset")
+            return
+
+        print(f"\n🔄 Phase 1: Refreshing open issues from last {LEADERBOARD_TIME_FRAME_DAYS - 1} days")
+        print(f"   (checking if previously open issues have been closed)")
+
+        total_checked = 0
+        total_updated = 0
+
+        # Step 1: Refresh all open issues from the last (LEADERBOARD_TIME_FRAME_DAYS - 1) days
+        for agent in agents:
+            identifier = agent.get('github_identifier')
+            if not identifier:
+                continue
+
+            try:
+                checked, updated = refresh_open_issues_for_agent(identifier, token)
+                total_checked += checked
+                total_updated += updated
+            except Exception as e:
+                print(f"   ⚠️ Error refreshing {identifier}: {str(e)}")
+                continue
+
+        print(f"\n   ✅ Phase 1 complete: {total_checked} open issues checked, {total_updated} updated")
+
+        print(f"\n📥 Phase 2: Fetching new issues from yesterday 12am UTC to today 12am UTC")
+
+        total_new_issues = 0
+
+        # Step 2: Fetch new issues for each agent
+        for agent in agents:
+            identifier = agent.get('github_identifier')
+            if not identifier:
+                continue
+
+            try:
+                new_count = fetch_new_issues_for_agent(identifier, token)
+                total_new_issues += new_count
+            except Exception as e:
+                print(f"   ⚠️ Error fetching new issues for {identifier}: {str(e)}")
+                continue
+
+        print(f"\n   ✅ Phase 2 complete: {total_new_issues} new issues fetched")
+
+        # Load updated metadata and calculate stats
+        print(f"\n📊 Calculating updated statistics...")
+        all_metadata = load_issue_metadata()
+
+        for agent in agents:
+            identifier = agent.get('github_identifier')
+            agent_name = agent.get('agent_name', 'Unknown')
+
+            if not identifier:
+                continue
+
+            try:
+                # Filter metadata for this agent
+                agent_metadata = [issue for issue in all_metadata if issue.get('agent_identifier') == identifier]
+
+                # Calculate stats from metadata
+                stats = calculate_issue_stats_from_metadata(agent_metadata)
+
+                print(f"   ✓ {identifier}: {stats['total_issues']} issues, {stats['resolved_rate']}% resolved")
+
+            except Exception as e:
+                print(f"   ✗ Error processing {identifier}: {str(e)}")
+                continue
+
+        print(f"\n✅ Daily incremental mining completed at {datetime.now(timezone.utc).isoformat()}")
+
+    except Exception as e:
+        print(f"✗ Daily incremental mining failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 
 def construct_leaderboard_from_metadata():
@@ -1548,57 +1435,6 @@ def construct_leaderboard_from_metadata():
         }
 
     return cache_dict
-
-
-def initialize_data():
-    """
-    Initialize data on application startup.
-    Constructs leaderboard from issue metadata.
-
-    In DEBUG MODE:
-    - If no data available, automatically mine up to 10 issues per query per agent
-    - Does NOT save to HuggingFace datasets
-    """
-    print("🚀 Initializing leaderboard data...")
-
-    # Try constructing from issue metadata (fast, memory-efficient)
-    print(f"📂 Checking {ISSUE_METADATA_REPO} for existing data...")
-    try:
-        cache_dict = construct_leaderboard_from_metadata()
-        # Check if there's actually meaningful data (at least one agent with issues)
-        has_data = any(entry.get('total_issues', 0) > 0 for entry in cache_dict.values())
-        if cache_dict and has_data:
-            print(f"✓ Found existing issue metadata. Leaderboard constructed from {ISSUE_METADATA_REPO}")
-            return
-        else:
-            print(f"   No meaningful data found in {ISSUE_METADATA_REPO}")
-    except Exception as e:
-        print(f"   Could not construct from metadata: {e}")
-
-    # If in debug mode and no data available, mine immediately
-    if DEBUG_MODE:
-        print("\n🐛 DEBUG MODE: No data available, mining immediately (up to 10 issues per query per agent)...")
-        agents = load_agents_from_hf()
-        if agents:
-            print(f"✓ Loaded {len(agents)} agents from HuggingFace")
-            print("⛏️ Mining GitHub data in debug mode (limited to 10 issues per query)...")
-            cache_dict = update_all_agents_incremental()
-            print("✓ Debug mining complete (data NOT saved to HuggingFace)")
-            return
-        else:
-            print("⚠️ No agents found. Waiting for first submission...")
-            return
-
-    # Production mode: Fallback to full incremental mining from GitHub
-    agents = load_agents_from_hf()
-    if agents:
-        print(f"✓ Loaded {len(agents)} agents from HuggingFace")
-        print("⛏️ Mining GitHub data (this may take a while)...")
-        cache_dict = update_all_agents_incremental()
-        return
-
-    # No data available
-    print("⚠️ No data sources available. Waiting for first submission...")
 
 
 # =============================================================================
@@ -1772,7 +1608,7 @@ def get_leaderboard_dataframe():
 def submit_agent(identifier, agent_name, organization, description, website):
     """
     Submit a new agent to the leaderboard.
-    Validates input, saves submission, and fetches PR metadata (memory-efficient).
+    Validates input and saves submission. Issue data will be populated by daily incremental updates.
     """
     # Validate required fields
     if not identifier or not identifier.strip():
@@ -1816,60 +1652,12 @@ def submit_agent(identifier, agent_name, organization, description, website):
     if not save_agent_to_hf(submission):
         return "❌ Failed to save submission", get_leaderboard_dataframe(), create_monthly_metrics_plot()
 
-    # Fetch issue metadata immediately (memory-efficient)
-    token = get_github_token()
-    try:
-        print(f"Fetching issue metadata for {agent_name}...")
-
-        # Fetch lightweight metadata
-        metadata_list = fetch_all_issues_metadata(identifier, agent_name, token)
-
-        if metadata_list:
-            # Save metadata to HuggingFace
-            save_issue_metadata_to_hf(metadata_list, identifier)
-
-        # Calculate stats from metadata
-        stats = calculate_issue_stats_from_metadata(metadata_list)
-
-        return f"✅ Successfully submitted {agent_name}! Stats: {stats['total_issues']} issues, {stats['resolved_rate']}% resolved", get_leaderboard_dataframe(), create_monthly_metrics_plot()
-
-    except Exception as e:
-        error_msg = f"⚠️ Submitted {agent_name}, but failed to fetch issue data: {str(e)}"
-        print(error_msg)
-        import traceback
-        traceback.print_exc()
-        return error_msg, get_leaderboard_dataframe(), create_monthly_metrics_plot()
+    return f"✅ Successfully submitted {agent_name}! Issue data will be populated by daily incremental updates.", get_leaderboard_dataframe(), create_monthly_metrics_plot()
 
 
 # =============================================================================
 # BACKGROUND TASKS
 # =============================================================================
-
-def daily_update_task():
-    """
-    Daily scheduled task (runs at 12:00 AM UTC) for regular issue mining.
-
-    Strategy:
-    1. Re-mine ALL issues within the 6-month window for each agent
-    2. This ensures metadata is always fresh (catches resolved → unresolved changes)
-    3. Update leaderboard with completely refreshed data
-
-    This ensures no stale metadata exists in the system.
-    """
-    print(f"\n{'='*80}")
-    print(f"🕛 Daily regular mining started at {datetime.now(timezone.utc).isoformat()}")
-    print(f"{'='*80}")
-
-    try:
-        # Use the incremental update function which now re-mines everything
-        update_all_agents_incremental()
-
-        print(f"\n✅ Daily regular mining completed at {datetime.now(timezone.utc).isoformat()}")
-
-    except Exception as e:
-        print(f"✗ Daily regular mining failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
 
 
 # =============================================================================
@@ -1898,12 +1686,10 @@ else:
         print("   (Explicitly set via '--no-debug' flag)")
     print()
 
-initialize_data()
-
 # Start APScheduler for daily regular issue mining at 12:00 AM UTC
 scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(
-    daily_update_task,
+    update_all_agents_incremental,
     trigger=CronTrigger(hour=0, minute=0),  # 12:00 AM UTC daily
     id='daily_regular_mining',
     name='Daily Regular Issue Mining',
