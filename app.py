@@ -198,12 +198,50 @@ def request_with_backoff(method, url, *, headers=None, params=None, json_body=No
     print(f"Exceeded max retries for {url}")
     return None
 
+def get_github_tokens():
+    """Get all GitHub tokens from environment variables (all keys starting with GITHUB_TOKEN)."""
+    tokens = []
+    for key, value in os.environ.items():
+        if key.startswith('GITHUB_TOKEN') and value:
+            tokens.append(value)
+
+    if not tokens:
+        print("Warning: No GITHUB_TOKEN found. API rate limits: 60/hour (authenticated: 5000/hour)")
+    else:
+        print(f"✓ Loaded {len(tokens)} GitHub token(s) for rotation")
+
+    return tokens
+
+
 def get_github_token():
-    """Get GitHub token from environment variables."""
+    """Get primary GitHub token from environment variables (backward compatibility)."""
     token = os.getenv('GITHUB_TOKEN')
     if not token:
         print("Warning: GITHUB_TOKEN not found. API rate limits: 60/hour (authenticated: 5000/hour)")
     return token
+
+
+class TokenPool:
+    """
+    Manages a pool of GitHub tokens for load balancing across rate limits.
+    Rotates through tokens in round-robin fashion to distribute API calls.
+    """
+    def __init__(self, tokens):
+        self.tokens = tokens if tokens else [None]
+        self.current_index = 0
+
+    def get_next_token(self):
+        """Get the next token in round-robin order."""
+        if not self.tokens:
+            return None
+        token = self.tokens[self.current_index]
+        self.current_index = (self.current_index + 1) % len(self.tokens)
+        return token
+
+    def get_headers(self):
+        """Get headers with the next token in rotation."""
+        token = self.get_next_token()
+        return {'Authorization': f'token {token}'} if token else {}
 
 
 def validate_github_username(identifier):
@@ -225,13 +263,18 @@ def validate_github_username(identifier):
         return False, f"Validation error: {str(e)}"
 
 
-def fetch_issues_with_time_partition(base_query, start_date, end_date, headers, issues_by_id, debug_limit=None, depth=0):
+def fetch_issues_with_time_partition(base_query, start_date, end_date, token_pool, issues_by_id, debug_limit=None, depth=0):
     """
     Fetch issues within a specific time range using time-based partitioning.
     Recursively splits the time range if hitting the 1000-result limit.
     Supports splitting by day, hour, minute, and second as needed.
 
     Args:
+        base_query: Base GitHub search query
+        start_date: Start date for time range
+        end_date: End date for time range
+        token_pool: TokenPool instance for rotating tokens
+        issues_by_id: Dictionary to store issues (deduplicated by ID)
         debug_limit: If set, stops fetching after this many issues (for testing)
         depth: Current recursion depth (for tracking)
 
@@ -284,6 +327,7 @@ def fetch_issues_with_time_partition(base_query, start_date, end_date, headers, 
         }
 
         try:
+            headers = token_pool.get_headers()
             response = request_with_backoff('GET', url, headers=headers, params=params)
             if response is None:
                 print(f"{indent}  Error: retries exhausted for range {start_str} to {end_str}")
@@ -331,7 +375,7 @@ def fetch_issues_with_time_partition(base_query, start_date, end_date, headers, 
                             split_start = split_start + timedelta(seconds=1)
 
                         count = fetch_issues_with_time_partition(
-                            base_query, split_start, split_end, headers, issues_by_id, debug_limit, depth + 1
+                            base_query, split_start, split_end, token_pool, issues_by_id, debug_limit, depth + 1
                         )
                         total_from_splits += count
 
@@ -352,7 +396,7 @@ def fetch_issues_with_time_partition(base_query, start_date, end_date, headers, 
                             split_start = split_start + timedelta(minutes=1)
 
                         count = fetch_issues_with_time_partition(
-                            base_query, split_start, split_end, headers, issues_by_id, debug_limit, depth + 1
+                            base_query, split_start, split_end, token_pool, issues_by_id, debug_limit, depth + 1
                         )
                         total_from_splits += count
 
@@ -373,7 +417,7 @@ def fetch_issues_with_time_partition(base_query, start_date, end_date, headers, 
                             split_start = split_start + timedelta(hours=1)
 
                         count = fetch_issues_with_time_partition(
-                            base_query, split_start, split_end, headers, issues_by_id, debug_limit, depth + 1
+                            base_query, split_start, split_end, token_pool, issues_by_id, debug_limit, depth + 1
                         )
                         total_from_splits += count
 
@@ -404,7 +448,7 @@ def fetch_issues_with_time_partition(base_query, start_date, end_date, headers, 
                                 split_start = split_start + timedelta(days=1)
 
                             count = fetch_issues_with_time_partition(
-                                base_query, split_start, split_end, headers, issues_by_id, debug_limit, depth + 1
+                                base_query, split_start, split_end, token_pool, issues_by_id, debug_limit, depth + 1
                             )
                             total_from_splits += count
 
@@ -415,10 +459,10 @@ def fetch_issues_with_time_partition(base_query, start_date, end_date, headers, 
 
                         # Recursively fetch both halves
                         count1 = fetch_issues_with_time_partition(
-                            base_query, start_date, mid_date, headers, issues_by_id, debug_limit, depth + 1
+                            base_query, start_date, mid_date, token_pool, issues_by_id, debug_limit, depth + 1
                         )
                         count2 = fetch_issues_with_time_partition(
-                            base_query, mid_date + timedelta(days=1), end_date, headers, issues_by_id, debug_limit, depth + 1
+                            base_query, mid_date + timedelta(days=1), end_date, token_pool, issues_by_id, debug_limit, depth + 1
                         )
 
                         return count1 + count2
@@ -1235,13 +1279,13 @@ def save_agent_to_hf(data):
 # DATA MANAGEMENT
 # =============================================================================
 
-def fetch_new_issues_for_agent(agent_identifier, token, query_patterns=None):
+def fetch_new_issues_for_agent(agent_identifier, token_pool, query_patterns=None):
     """
     Fetch and save new issues for an agent from yesterday 12am UTC to today 12am UTC.
 
     Args:
         agent_identifier: GitHub identifier of the agent
-        token: GitHub API token
+        token_pool: TokenPool instance for rotating tokens
         query_patterns: List of query patterns to search (if None, uses default)
 
     Returns:
@@ -1260,8 +1304,6 @@ def fetch_new_issues_for_agent(agent_identifier, token, query_patterns=None):
     today_midnight = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_midnight = today_midnight - timedelta(days=1)
 
-    headers = {'Authorization': f'token {token}'} if token else {}
-
     print(f"\n  📥 Fetching new issues for {agent_identifier}...")
     print(f"     Time range: {yesterday_midnight.isoformat()} to {today_midnight.isoformat()}")
 
@@ -1276,7 +1318,7 @@ def fetch_new_issues_for_agent(agent_identifier, token, query_patterns=None):
                 base_query,
                 yesterday_midnight,
                 today_midnight,
-                headers,
+                token_pool,
                 issues_by_id,
                 debug_limit=10 if DEBUG_MODE else None,
                 depth=0
@@ -1316,8 +1358,12 @@ def update_all_agents_incremental():
     print(f"{'='*80}")
 
     try:
-        # Get GitHub token
-        token = get_github_token()
+        # Load all GitHub tokens and create token pool
+        tokens = get_github_tokens()
+        token_pool = TokenPool(tokens)
+
+        # Get first token for functions that still need single token
+        token = tokens[0] if tokens else None
 
         # Load agent metadata from HuggingFace
         agents = load_agents_from_hf()
@@ -1358,7 +1404,7 @@ def update_all_agents_incremental():
                 continue
 
             try:
-                new_count = fetch_new_issues_for_agent(identifier, token)
+                new_count = fetch_new_issues_for_agent(identifier, token_pool)
                 total_new_issues += new_count
             except Exception as e:
                 print(f"   ⚠️ Error fetching new issues for {identifier}: {str(e)}")
