@@ -564,11 +564,16 @@ def save_issue_metadata_to_hf(metadata_list, agent_identifier):
     Each file is stored in the agent's folder and named YYYY.MM.DD.jsonl for that day's issues.
 
     This function APPENDS new metadata and DEDUPLICATES by html_url.
+    Uses batch folder upload to minimize commits (1 commit per agent instead of 1 per file).
 
     Args:
         metadata_list: List of issue metadata dictionaries
         agent_identifier: GitHub identifier of the agent (used as folder name)
     """
+    import tempfile
+    import shutil
+
+    temp_dir = None
     try:
         token = get_hf_token()
         if not token:
@@ -576,13 +581,22 @@ def save_issue_metadata_to_hf(metadata_list, agent_identifier):
 
         api = HfApi()
 
+        # Create temporary directory for batch upload
+        temp_dir = tempfile.mkdtemp()
+        agent_folder = os.path.join(temp_dir, agent_identifier)
+        os.makedirs(agent_folder, exist_ok=True)
+
         # Group by exact date (year, month, day)
         grouped = group_metadata_by_date(metadata_list)
+
+        print(f"📤 Preparing batch upload for {agent_identifier} ({len(grouped)} daily files)...")
 
         for (issue_year, month, day), day_metadata in grouped.items():
             filename = f"{agent_identifier}/{issue_year}.{month:02d}.{day:02d}.jsonl"
             local_filename = f"{issue_year}.{month:02d}.{day:02d}.jsonl"
-            print(f"📤 Uploading {len(day_metadata)} issues to {filename}...")
+            local_path = os.path.join(agent_folder, local_filename)
+
+            print(f"   Preparing {len(day_metadata)} issues for {filename}...")
 
             # Download existing file if it exists
             existing_metadata = []
@@ -606,30 +620,31 @@ def save_issue_metadata_to_hf(metadata_list, agent_identifier):
             existing_by_url.update(new_by_url)
             merged_metadata = list(existing_by_url.values())
 
-            # Save locally
-            save_jsonl(local_filename, merged_metadata)
+            # Save to temporary folder
+            save_jsonl(local_path, merged_metadata)
+            print(f"   ✓ Prepared {len(merged_metadata)} total issues for {local_filename}")
 
-            try:
-                # Upload to HuggingFace with folder path
-                upload_with_retry(
-                    api=api,
-                    path_or_fileobj=local_filename,
-                    path_in_repo=filename,
-                    repo_id=ISSUE_METADATA_REPO,
-                    repo_type="dataset",
-                    token=token
-                )
-                print(f"   ✓ Saved {len(merged_metadata)} total issues to {filename}")
-            finally:
-                # Always clean up local file, even if upload fails
-                if os.path.exists(local_filename):
-                    os.remove(local_filename)
+        # Upload entire folder in a single commit
+        print(f"📤 Uploading folder {agent_identifier} to HuggingFace (1 commit)...")
+        api.upload_folder(
+            folder_path=agent_folder,
+            path_in_repo=agent_identifier,
+            repo_id=ISSUE_METADATA_REPO,
+            repo_type="dataset",
+            token=token,
+            commit_message=f"Update metadata for {agent_identifier}"
+        )
+        print(f"   ✓ Successfully uploaded {len(grouped)} files in 1 commit")
 
         return True
 
     except Exception as e:
         print(f"✗ Error saving issue metadata: {str(e)}")
         return False
+    finally:
+        # Always clean up temporary directory
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
 
 def load_agents_from_hf():
