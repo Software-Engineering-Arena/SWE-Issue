@@ -8,6 +8,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub.errors import HfHubHTTPError
 from dotenv import load_dotenv
 import pandas as pd
 import random
@@ -16,6 +17,7 @@ from plotly.subplots import make_subplots
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from google.cloud import bigquery
+import backoff
 
 # Load environment variables
 load_dotenv()
@@ -37,6 +39,62 @@ LEADERBOARD_COLUMNS = [
     ("Resolved Issues", "number"),
     ("Resolved Rate (%)", "number"),
 ]
+
+# =============================================================================
+# HUGGINGFACE API WRAPPERS WITH BACKOFF
+# =============================================================================
+
+def is_rate_limit_error(e):
+    """Check if the exception is a rate limit error (429)."""
+    return isinstance(e, HfHubHTTPError) and e.response.status_code == 429
+
+@backoff.on_exception(
+    backoff.expo,
+    HfHubHTTPError,
+    giveup=lambda e: not is_rate_limit_error(e),
+    max_tries=8,
+    jitter=backoff.full_jitter,
+    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']:.1f}s (attempt {details['tries']}/{8})...")
+)
+def upload_large_folder_with_backoff(api, **kwargs):
+    """Upload large folder with exponential backoff on rate limit errors."""
+    return api.upload_large_folder(**kwargs)
+
+@backoff.on_exception(
+    backoff.expo,
+    HfHubHTTPError,
+    giveup=lambda e: not is_rate_limit_error(e),
+    max_tries=8,
+    jitter=backoff.full_jitter,
+    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']:.1f}s (attempt {details['tries']}/{8})...")
+)
+def list_repo_files_with_backoff(api, **kwargs):
+    """List repo files with exponential backoff on rate limit errors."""
+    return api.list_repo_files(**kwargs)
+
+@backoff.on_exception(
+    backoff.expo,
+    HfHubHTTPError,
+    giveup=lambda e: not is_rate_limit_error(e),
+    max_tries=8,
+    jitter=backoff.full_jitter,
+    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']:.1f}s (attempt {details['tries']}/{8})...")
+)
+def hf_hub_download_with_backoff(**kwargs):
+    """Download from HF Hub with exponential backoff on rate limit errors."""
+    return hf_hub_download(**kwargs)
+
+@backoff.on_exception(
+    backoff.expo,
+    HfHubHTTPError,
+    giveup=lambda e: not is_rate_limit_error(e),
+    max_tries=8,
+    jitter=backoff.full_jitter,
+    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']:.1f}s (attempt {details['tries']}/{8})...")
+)
+def upload_file_with_backoff(api, **kwargs):
+    """Upload file with exponential backoff on rate limit errors."""
+    return api.upload_file(**kwargs)
 
 # =============================================================================
 # JSONL FILE OPERATIONS
@@ -727,7 +785,8 @@ def save_issue_metadata_to_hf(metadata_list, agent_identifier):
         # Upload entire folder using upload_large_folder (optimized for large files)
         # Note: upload_large_folder creates multiple commits automatically and doesn't support custom commit_message
         print(f"🤗 Uploading {len(grouped)} files ({len(metadata_list)} total issues)...")
-        api.upload_large_folder(
+        upload_large_folder_with_backoff(
+            api,
             folder_path=temp_dir,
             repo_id=ISSUE_METADATA_REPO,
             repo_type="dataset"
@@ -764,7 +823,7 @@ def load_issue_metadata():
         token = get_hf_token()
 
         # List all files in the repository
-        files = api.list_repo_files(repo_id=ISSUE_METADATA_REPO, repo_type="dataset")
+        files = list_repo_files_with_backoff(api, repo_id=ISSUE_METADATA_REPO, repo_type="dataset")
 
         # Filter for files within the time frame: [agent_identifier]/YYYY.MM.DD.jsonl
         # Parse date from filename and only include files within LEADERBOARD_TIME_FRAME_DAYS
@@ -803,7 +862,7 @@ def load_issue_metadata():
 
                 agent_identifier = parts[0]
 
-                file_path = hf_hub_download(
+                file_path = hf_hub_download_with_backoff(
                     repo_id=ISSUE_METADATA_REPO,
                     filename=filename,
                     repo_type="dataset",
@@ -856,7 +915,7 @@ def get_latest_issue_date_for_agent(agent_identifier):
         token = get_hf_token()
 
         # List all files in the repository
-        files = api.list_repo_files(repo_id=ISSUE_METADATA_REPO, repo_type="dataset")
+        files = list_repo_files_with_backoff(api, repo_id=ISSUE_METADATA_REPO, repo_type="dataset")
 
         # Filter for files in this agent's folder
         # New structure: [agent_identifier]/YYYY.MM.DD.jsonl
@@ -870,7 +929,7 @@ def get_latest_issue_date_for_agent(agent_identifier):
         latest_date = None
         for filename in agent_files:
             try:
-                file_path = hf_hub_download(
+                file_path = hf_hub_download_with_backoff(
                     repo_id=ISSUE_METADATA_REPO,
                     filename=filename,
                     repo_type="dataset",
@@ -915,7 +974,7 @@ def get_daily_files_last_time_frame(agent_identifier):
         cutoff_date = today - timedelta(days=LEADERBOARD_TIME_FRAME_DAYS)
 
         # List all files in the repository
-        files = api.list_repo_files(repo_id=ISSUE_METADATA_REPO, repo_type="dataset")
+        files = list_repo_files_with_backoff(api, repo_id=ISSUE_METADATA_REPO, repo_type="dataset")
 
         # Filter for files in this agent's folder
         agent_pattern = f"{agent_identifier}/"
@@ -962,7 +1021,7 @@ def load_agents_from_hf():
         agents = []
 
         # List all files in the repository
-        files = api.list_repo_files(repo_id=AGENTS_REPO, repo_type="dataset")
+        files = list_repo_files_with_backoff(api, repo_id=AGENTS_REPO, repo_type="dataset")
 
         # Filter for JSON files only
         json_files = [f for f in files if f.endswith('.json')]
@@ -970,7 +1029,7 @@ def load_agents_from_hf():
         # Download and parse each JSON file
         for json_file in json_files:
             try:
-                file_path = hf_hub_download(
+                file_path = hf_hub_download_with_backoff(
                     repo_id=AGENTS_REPO,
                     filename=json_file,
                     repo_type="dataset"
@@ -1034,7 +1093,7 @@ def load_cached_leaderboard_and_metrics():
         print("📥 Loading cached leaderboard and metrics from HuggingFace...")
 
         # Download cached file
-        cached_path = hf_hub_download(
+        cached_path = hf_hub_download_with_backoff(
             repo_id=LEADERBOARD_REPO,
             filename="swe-issue.json",
             repo_type="dataset",
@@ -1194,7 +1253,8 @@ def save_leaderboard_and_metrics_to_hf():
 
         # Upload to HuggingFace (will overwrite if exists)
         print(f"\n🤗 Uploading to {LEADERBOARD_REPO}...")
-        api.upload_file(
+        upload_file_with_backoff(
+            api,
             path_or_fileobj=file_like_object,
             path_in_repo="swe-issue.json",
             repo_id=LEADERBOARD_REPO,
