@@ -1,5 +1,5 @@
 import gradio as gr
-from gradio_leaderboard import Leaderboard
+from gradio_leaderboard import Leaderboard, ColumnFilter
 import json
 import os
 import time
