@@ -1038,6 +1038,11 @@ def load_agents_from_hf():
                 with open(file_path, 'r') as f:
                     agent_data = json.load(f)
 
+                    # Only process agents with status == "public"
+                    if agent_data.get('status') != 'public':
+                        print(f"Skipping {json_file}: status is not 'public'")
+                        continue
+
                     # Extract github_identifier from filename (e.g., "agent[bot].json" -> "agent[bot]")
                     filename_identifier = json_file.replace('.json', '')
 
