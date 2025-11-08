@@ -1426,12 +1426,12 @@ with gr.Blocks(title="SWE Agent Issue Leaderboard", theme=gr.themes.Soft()) as a
                 search_columns=["Agent Name", "Website"],
                 filter_columns=[
                     ColumnFilter(
-                        "Acceptance Rate (%)",
+                        "Resolved Rate (%)",
                         min=0,
                         max=100,
                         default=[0, 100],
                         type="slider",
-                        label="Acceptance Rate (%)"
+                        label="Resolved Rate (%)"
                     )
                 ]
             )
