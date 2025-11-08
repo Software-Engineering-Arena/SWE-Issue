@@ -153,7 +153,7 @@ def fetch_all_issue_metadata_single_query(client, identifiers, start_date, end_d
     # Generate table UNION statements for issue events
     issue_tables = generate_table_union_statements(start_date, end_date)
 
-    # Build identifier list for IN clause (handle both bot and non-bot versions)
+    # Build identifier list (handle both bot and non-bot versions)
     identifier_set = set()
     for id in identifiers:
         identifier_set.add(id)
@@ -162,11 +162,20 @@ def fetch_all_issue_metadata_single_query(client, identifiers, start_date, end_d
         if stripped != id:
             identifier_set.add(stripped)
 
-    identifier_list = ', '.join([f"'{id}'" for id in identifier_set])
+    # Convert to array literal for UNNEST (avoids query size limits from large IN clauses)
+    identifier_array = '[' + ', '.join([f'"{id}"' for id in identifier_set]) + ']'
 
-    # Build comprehensive query with CTEs
+    print(f"   Total identifiers (including bot/non-bot variants): {len(identifier_set)}")
+
+    # Build comprehensive query with CTEs using UNNEST instead of large IN clauses
     query = f"""
-    WITH issue_events AS (
+    WITH agent_identifiers AS (
+      -- Create a table from the identifier array to avoid massive IN clauses
+      SELECT identifier
+      FROM UNNEST({identifier_array}) AS identifier
+    ),
+
+    issue_events AS (
       -- Get all issue events and comment events for ALL agents
       SELECT
         JSON_EXTRACT_SCALAR(payload, '$.issue.html_url') as url,
@@ -187,11 +196,11 @@ def fetch_all_issue_metadata_single_query(client, identifiers, start_date, end_d
         -- Exclude pull requests (they have pull_request field)
         AND JSON_EXTRACT(payload, '$.issue.pull_request') IS NULL
         AND JSON_EXTRACT_SCALAR(payload, '$.issue.html_url') IS NOT NULL
-        -- Filter by author OR commenter OR assignee
+        -- Filter by author OR commenter OR assignee using JOIN instead of IN
         AND (
-          JSON_EXTRACT_SCALAR(payload, '$.issue.user.login') IN ({identifier_list})
-          OR JSON_EXTRACT_SCALAR(payload, '$.comment.user.login') IN ({identifier_list})
-          OR JSON_EXTRACT_SCALAR(payload, '$.issue.assignee.login') IN ({identifier_list})
+          JSON_EXTRACT_SCALAR(payload, '$.issue.user.login') IN (SELECT identifier FROM agent_identifiers)
+          OR JSON_EXTRACT_SCALAR(payload, '$.comment.user.login') IN (SELECT identifier FROM agent_identifiers)
+          OR JSON_EXTRACT_SCALAR(payload, '$.issue.assignee.login') IN (SELECT identifier FROM agent_identifiers)
         )
     ),
 
@@ -216,9 +225,9 @@ def fetch_all_issue_metadata_single_query(client, identifiers, start_date, end_d
       -- Map each issue to its relevant agent(s)
       SELECT DISTINCT
         CASE
-          WHEN author IN ({identifier_list}) THEN author
-          WHEN commenter IN ({identifier_list}) THEN commenter
-          WHEN assignee IN ({identifier_list}) THEN assignee
+          WHEN author IN (SELECT identifier FROM agent_identifiers) THEN author
+          WHEN commenter IN (SELECT identifier FROM agent_identifiers) THEN commenter
+          WHEN assignee IN (SELECT identifier FROM agent_identifiers) THEN assignee
           ELSE NULL
         END as agent_identifier,
         url,
@@ -227,9 +236,9 @@ def fetch_all_issue_metadata_single_query(client, identifiers, start_date, end_d
         state_reason
       FROM latest_states
       WHERE
-        author IN ({identifier_list})
-        OR commenter IN ({identifier_list})
-        OR assignee IN ({identifier_list})
+        author IN (SELECT identifier FROM agent_identifiers)
+        OR commenter IN (SELECT identifier FROM agent_identifiers)
+        OR assignee IN (SELECT identifier FROM agent_identifiers)
     )
 
     SELECT
