@@ -21,6 +21,7 @@ load_dotenv()
 
 AGENTS_REPO = "SWE-Arena/swe_agents"
 ISSUE_METADATA_REPO = "SWE-Arena/issue_metadata"
+LEADERBOARD_REPO = "SWE-Arena/swe_leaderboards"
 LEADERBOARD_TIME_FRAME_DAYS = 3  # Time frame for leaderboard
 
 # =============================================================================
@@ -465,6 +466,224 @@ def load_agents_from_hf():
 
 
 # =============================================================================
+# LEADERBOARD CALCULATION FUNCTIONS
+# =============================================================================
+
+def calculate_issue_stats_from_metadata(metadata_list):
+    """
+    Calculate statistics from a list of issue metadata.
+
+    Returns:
+        dict: Issue statistics including total, closed, resolved counts and rate
+    """
+    total_issues = len(metadata_list)
+
+    # Count closed issues (those with closed_at timestamp)
+    closed_issues = sum(1 for issue_meta in metadata_list
+                       if issue_meta.get('closed_at') is not None)
+
+    # Count completed issues (subset of closed issues with state_reason="completed")
+    completed = sum(1 for issue_meta in metadata_list
+                   if issue_meta.get('state_reason') == 'completed')
+
+    # Calculate resolved rate as: completed / closed (not completed / total)
+    resolved_rate = (completed / closed_issues * 100) if closed_issues > 0 else 0
+
+    return {
+        'total_issues': total_issues,
+        'closed_issues': closed_issues,
+        'resolved_issues': completed,
+        'resolved_rate': round(resolved_rate, 2),
+    }
+
+
+def calculate_monthly_metrics(all_metadata, agents):
+    """
+    Calculate monthly metrics for all agents for visualization.
+
+    Args:
+        all_metadata: Dictionary mapping agent_identifier to list of issue metadata
+        agents: List of agent dictionaries with metadata
+
+    Returns:
+        dict: {
+            'agents': list of agent names,
+            'months': list of month labels (e.g., '2025-01'),
+            'data': {
+                agent_name: {
+                    'resolved_rates': list of resolved rates by month,
+                    'total_issues': list of issue counts by month,
+                    'resolved_issues': list of resolved issue counts by month
+                }
+            }
+        }
+    """
+    # Create mapping from agent_identifier to agent_name
+    identifier_to_name = {
+        agent.get('github_identifier'): agent.get('name', agent.get('agent_name', agent.get('github_identifier')))
+        for agent in agents if agent.get('github_identifier')
+    }
+
+    # Group by agent and month
+    agent_month_data = defaultdict(lambda: defaultdict(list))
+
+    for identifier, metadata_list in all_metadata.items():
+        agent_name = identifier_to_name.get(identifier, identifier)
+
+        for issue_meta in metadata_list:
+            created_at = issue_meta.get('created_at')
+            if not created_at:
+                continue
+
+            try:
+                dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                month_key = f"{dt.year}-{dt.month:02d}"
+                agent_month_data[agent_name][month_key].append(issue_meta)
+            except Exception as e:
+                print(f"Warning: Could not parse date '{created_at}': {e}")
+                continue
+
+    # Get all unique months and sort them
+    all_months = set()
+    for agent_data in agent_month_data.values():
+        all_months.update(agent_data.keys())
+    months = sorted(list(all_months))
+
+    # Calculate metrics for each agent and month
+    result_data = {}
+    for agent_name, month_dict in agent_month_data.items():
+        resolved_rates = []
+        total_issues_list = []
+        resolved_issues_list = []
+
+        for month in months:
+            issues_in_month = month_dict.get(month, [])
+
+            # Count completed issues (those with state_reason="completed")
+            completed_count = sum(1 for issue in issues_in_month if issue.get('state_reason') == 'completed')
+
+            # Count closed issues (those with closed_at timestamp)
+            closed_count = sum(1 for issue in issues_in_month if issue.get('closed_at') is not None)
+
+            # Total issues created in this month
+            total_count = len(issues_in_month)
+
+            # Calculate resolved rate as: completed / closed (not completed / total)
+            resolved_rate = (completed_count / closed_count * 100) if closed_count > 0 else None
+
+            resolved_rates.append(resolved_rate)
+            total_issues_list.append(total_count)
+            resolved_issues_list.append(completed_count)
+
+        result_data[agent_name] = {
+            'resolved_rates': resolved_rates,
+            'total_issues': total_issues_list,
+            'resolved_issues': resolved_issues_list
+        }
+
+    agents_list = sorted(list(agent_month_data.keys()))
+
+    return {
+        'agents': agents_list,
+        'months': months,
+        'data': result_data
+    }
+
+
+def save_leaderboard_and_metrics_to_hf(all_metadata, agents):
+    """
+    Save leaderboard data and monthly metrics to SWE-Arena/swe_leaderboards dataset.
+    Creates a comprehensive JSON file with both leaderboard stats and monthly metrics.
+    If the file exists, it will be overwritten.
+
+    Args:
+        all_metadata: Dictionary mapping agent_identifier to list of issue metadata
+        agents: List of agent dictionaries with metadata
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    import io
+
+    try:
+        token = get_hf_token()
+        if not token:
+            raise Exception("No HuggingFace token found")
+
+        api = HfApi(token=token)
+
+        print(f"\n{'='*80}")
+        print(f"📊 Preparing leaderboard and metrics data for upload...")
+        print(f"{'='*80}\n")
+
+        # Build leaderboard data
+        print("   Constructing leaderboard data...")
+        leaderboard_data = {}
+
+        for agent in agents:
+            identifier = agent.get('github_identifier')
+            agent_name = agent.get('name', agent.get('agent_name', 'Unknown'))
+
+            if not identifier:
+                continue
+
+            metadata = all_metadata.get(identifier, [])
+            stats = calculate_issue_stats_from_metadata(metadata)
+
+            leaderboard_data[identifier] = {
+                'agent_name': agent_name,
+                'website': agent.get('website', 'N/A'),
+                'github_identifier': identifier,
+                **stats
+            }
+
+        # Get monthly metrics data
+        print("   Calculating monthly metrics...")
+        monthly_metrics = calculate_monthly_metrics(all_metadata, agents)
+
+        # Combine into a single structure
+        combined_data = {
+            "leaderboard": leaderboard_data,
+            "monthly_metrics": monthly_metrics,
+            "metadata": {
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "time_frame_days": LEADERBOARD_TIME_FRAME_DAYS,
+                "total_agents": len(leaderboard_data)
+            }
+        }
+
+        print(f"   Leaderboard entries: {len(leaderboard_data)}")
+        print(f"   Monthly metrics for: {len(monthly_metrics['agents'])} agents")
+        print(f"   Time frame: {LEADERBOARD_TIME_FRAME_DAYS} days")
+
+        # Convert to JSON and create file-like object
+        json_content = json.dumps(combined_data, indent=2)
+        file_like_object = io.BytesIO(json_content.encode('utf-8'))
+
+        # Upload to HuggingFace (will overwrite if exists)
+        print(f"\n🤗 Uploading to {LEADERBOARD_REPO}...")
+        api.upload_file(
+            path_or_fileobj=file_like_object,
+            path_in_repo="swe-issue.json",
+            repo_id=LEADERBOARD_REPO,
+            repo_type="dataset",
+            token=token,
+            commit_message=f"Update leaderboard data - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        )
+
+        print(f"   ✓ Successfully uploaded swe-issue.json")
+        print(f"{'='*80}\n")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ Error saving leaderboard and metrics: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+# =============================================================================
 # MAIN MINING FUNCTION
 # =============================================================================
 
@@ -561,6 +780,13 @@ def mine_all_agents():
     print(f"   Errors: {error_count}")
     print(f"   BigQuery queries executed: 1")
     print(f"{'='*80}\n")
+
+    # After mining is complete, save leaderboard and metrics to HuggingFace
+    print(f"📤 Uploading leaderboard and metrics data...")
+    if save_leaderboard_and_metrics_to_hf(all_metadata, agents):
+        print(f"✓ Leaderboard and metrics successfully uploaded to {LEADERBOARD_REPO}")
+    else:
+        print(f"⚠️ Failed to upload leaderboard and metrics data")
 
 
 # =============================================================================

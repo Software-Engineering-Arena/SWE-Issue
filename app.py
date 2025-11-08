@@ -938,6 +938,48 @@ def get_hf_token():
     return token
 
 
+def load_cached_leaderboard_and_metrics():
+    """
+    Load cached leaderboard and monthly metrics data from SWE-Arena/swe_leaderboards dataset.
+    This is much faster than constructing from scratch on every app launch.
+
+    Returns:
+        dict: {
+            'leaderboard': dict of agent stats,
+            'monthly_metrics': dict with agents, months, and data,
+            'metadata': dict with last_updated, time_frame_days, total_agents
+        }
+        Returns None if cache doesn't exist or fails to load.
+    """
+    try:
+        token = get_hf_token()
+
+        print("📥 Loading cached leaderboard and metrics from HuggingFace...")
+
+        # Download cached file
+        cached_path = hf_hub_download(
+            repo_id="SWE-Arena/swe_leaderboards",
+            filename="swe-issue.json",
+            repo_type="dataset",
+            token=token
+        )
+
+        # Load JSON data
+        with open(cached_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        print(f"   ✓ Loaded cached data (last updated: {data.get('metadata', {}).get('last_updated', 'Unknown')})")
+        print(f"   ✓ Leaderboard entries: {len(data.get('leaderboard', {}))}")
+        print(f"   ✓ Monthly metrics for: {len(data.get('monthly_metrics', {}).get('agents', []))} agents")
+
+        return data
+
+    except Exception as e:
+        print(f"⚠️ Could not load cached data: {str(e)}")
+        print(f"   Falling back to constructing from issue metadata...")
+        return None
+
+
 def upload_with_retry(api, path_or_fileobj, path_in_repo, repo_id, repo_type, token, max_retries=5):
     """
     Upload file to HuggingFace with exponential backoff retry logic.
@@ -1024,6 +1066,78 @@ def save_agent_to_hf(data):
 # =============================================================================
 # DATA MANAGEMENT
 # =============================================================================
+
+def save_leaderboard_and_metrics_to_hf():
+    """
+    Save leaderboard data and monthly metrics to SWE-Arena/swe_leaderboards dataset.
+    Creates a comprehensive JSON file with both leaderboard stats and monthly metrics.
+    If the file exists, it will be overwritten.
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    import io
+
+    try:
+        token = get_hf_token()
+        if not token:
+            raise Exception("No HuggingFace token found")
+
+        api = HfApi(token=token)
+
+        print(f"\n{'='*80}")
+        print(f"📊 Preparing leaderboard and metrics data for upload...")
+        print(f"{'='*80}\n")
+
+        # Get leaderboard data
+        print("   Constructing leaderboard data...")
+        leaderboard_data = construct_leaderboard_from_metadata()
+
+        # Get monthly metrics data (all agents, not just top N)
+        print("   Calculating monthly metrics...")
+        monthly_metrics = calculate_monthly_metrics_by_agent(top_n=None)
+
+        # Combine into a single structure
+        combined_data = {
+            "leaderboard": leaderboard_data,
+            "monthly_metrics": monthly_metrics,
+            "metadata": {
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "time_frame_days": LEADERBOARD_TIME_FRAME_DAYS,
+                "total_agents": len(leaderboard_data)
+            }
+        }
+
+        print(f"   Leaderboard entries: {len(leaderboard_data)}")
+        print(f"   Monthly metrics for: {len(monthly_metrics['agents'])} agents")
+        print(f"   Time frame: {LEADERBOARD_TIME_FRAME_DAYS} days")
+
+        # Convert to JSON and create file-like object
+        json_content = json.dumps(combined_data, indent=2)
+        file_like_object = io.BytesIO(json_content.encode('utf-8'))
+
+        # Upload to HuggingFace (will overwrite if exists)
+        print(f"\n🤗 Uploading to SWE-Arena/swe_leaderboards...")
+        api.upload_file(
+            path_or_fileobj=file_like_object,
+            path_in_repo="swe-issue.json",
+            repo_id="SWE-Arena/swe_leaderboards",
+            repo_type="dataset",
+            token=token,
+            commit_message=f"Update leaderboard data - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        )
+
+        print(f"   ✓ Successfully uploaded swe-issue.json")
+        print(f"{'='*80}\n")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ Error saving leaderboard and metrics: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 
 def mine_all_agents():
     """
@@ -1122,6 +1236,13 @@ def mine_all_agents():
     print(f"   BigQuery queries executed: 1")
     print(f"{'='*80}\n")
 
+    # After mining is complete, save leaderboard and metrics to HuggingFace
+    print(f"📤 Uploading leaderboard and metrics data...")
+    if save_leaderboard_and_metrics_to_hf():
+        print(f"✓ Leaderboard and metrics successfully uploaded to SWE-Arena/swe_leaderboards")
+    else:
+        print(f"⚠️ Failed to upload leaderboard and metrics data")
+
 
 def construct_leaderboard_from_metadata():
     """
@@ -1183,7 +1304,37 @@ def create_monthly_metrics_plot():
     Each agent gets a unique color for both their line and bars.
     Shows only top 5 agents by total issue count.
     """
-    metrics = calculate_monthly_metrics_by_agent(top_n=5)
+    # Try to load from cache first
+    cached_data = load_cached_leaderboard_and_metrics()
+
+    if cached_data and 'monthly_metrics' in cached_data:
+        # Use cached monthly metrics
+        all_metrics = cached_data['monthly_metrics']
+
+        # Filter to top 5 agents by total issue count
+        if all_metrics.get('agents') and all_metrics.get('data'):
+            # Calculate total issues for each agent
+            agent_totals = []
+            for agent_name in all_metrics['agents']:
+                total_issues = sum(all_metrics['data'][agent_name]['total_issues'])
+                agent_totals.append((agent_name, total_issues))
+
+            # Sort and take top 5
+            agent_totals.sort(key=lambda x: x[1], reverse=True)
+            top_agents = [agent_name for agent_name, _ in agent_totals[:5]]
+
+            # Filter metrics to only include top agents
+            metrics = {
+                'agents': top_agents,
+                'months': all_metrics['months'],
+                'data': {agent: all_metrics['data'][agent] for agent in top_agents if agent in all_metrics['data']}
+            }
+        else:
+            metrics = all_metrics
+    else:
+        # Fallback: Calculate from issue metadata
+        print("   Calculating monthly metrics from issue metadata...")
+        metrics = calculate_monthly_metrics_by_agent(top_n=5)
 
     if not metrics['agents'] or not metrics['months']:
         # Return an empty figure with a message
@@ -1292,11 +1443,19 @@ def create_monthly_metrics_plot():
 
 def get_leaderboard_dataframe():
     """
-    Construct leaderboard from issue metadata and convert to pandas DataFrame for display.
+    Load leaderboard from cached data and convert to pandas DataFrame for display.
+    Falls back to constructing from issue metadata if cache is unavailable.
     Returns formatted DataFrame sorted by total issues.
     """
-    # Construct leaderboard from metadata
-    cache_dict = construct_leaderboard_from_metadata()
+    # Try to load from cache first
+    cached_data = load_cached_leaderboard_and_metrics()
+
+    if cached_data and 'leaderboard' in cached_data:
+        cache_dict = cached_data['leaderboard']
+    else:
+        # Fallback: Construct leaderboard from metadata
+        print("   Constructing leaderboard from issue metadata...")
+        cache_dict = construct_leaderboard_from_metadata()
 
     if not cache_dict:
         # Return empty DataFrame with correct columns if no data
