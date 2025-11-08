@@ -22,7 +22,7 @@ load_dotenv()
 AGENTS_REPO = "SWE-Arena/swe_agents"
 ISSUE_METADATA_REPO = "SWE-Arena/issue_metadata"
 LEADERBOARD_REPO = "SWE-Arena/swe_leaderboards"
-LEADERBOARD_TIME_FRAME_DAYS = 3  # Time frame for leaderboard
+LEADERBOARD_TIME_FRAME_DAYS = 180  # Time frame for leaderboard
 
 # =============================================================================
 # UTILITY FUNCTIONS
