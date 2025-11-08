@@ -1293,7 +1293,7 @@ def create_monthly_metrics_plot():
 def get_leaderboard_dataframe():
     """
     Construct leaderboard from issue metadata and convert to pandas DataFrame for display.
-    Returns formatted DataFrame sorted by resolved rate.
+    Returns formatted DataFrame sorted by total issues.
     """
     # Construct leaderboard from metadata
     cache_dict = construct_leaderboard_from_metadata()
@@ -1327,9 +1327,9 @@ def get_leaderboard_dataframe():
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # Sort by Resolved Rate (%) descending
-    if "Resolved Rate (%)" in df.columns and not df.empty:
-        df = df.sort_values(by="Resolved Rate (%)", ascending=False).reset_index(drop=True)
+    # Sort by Total Issues descending
+    if "Total Issues" in df.columns and not df.empty:
+        df = df.sort_values(by="Total Issues", ascending=False).reset_index(drop=True)
 
     return df
 
