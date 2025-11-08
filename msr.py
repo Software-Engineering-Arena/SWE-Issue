@@ -19,7 +19,7 @@ load_dotenv()
 # CONFIGURATION
 # =============================================================================
 
-AGENTS_REPO = "SWE-Arena/swe_agents"
+AGENTS_REPO = "SWE-Arena/bot_metadata"
 ISSUE_METADATA_REPO = "SWE-Arena/issue_metadata"
 LEADERBOARD_REPO = "SWE-Arena/leaderboard_metadata"
 LEADERBOARD_TIME_FRAME_DAYS = 180  # Time frame for leaderboard

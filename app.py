@@ -24,7 +24,7 @@ load_dotenv()
 # CONFIGURATION
 # =============================================================================
 
-AGENTS_REPO = "SWE-Arena/swe_agents"  # HuggingFace dataset for agent metadata
+AGENTS_REPO = "SWE-Arena/bot_metadata"  # HuggingFace dataset for agent metadata
 ISSUE_METADATA_REPO = "SWE-Arena/issue_metadata"  # HuggingFace dataset for issue metadata
 LEADERBOARD_TIME_FRAME_DAYS = 180  # Time frame for leaderboard
 UPDATE_TIME_FRAME_DAYS = 30  # How often to re-mine data via BigQuery
