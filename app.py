@@ -1424,7 +1424,16 @@ with gr.Blocks(title="SWE Agent Issue Leaderboard", theme=gr.themes.Soft()) as a
                 value=get_leaderboard_dataframe(),
                 datatype=LEADERBOARD_COLUMNS,
                 search_columns=["Agent Name", "Website"],
-                filter_columns=["Resolved Rate (%)"]
+                filter_columns=[
+                    ColumnFilter(
+                        "Acceptance Rate (%)",
+                        min=0,
+                        max=100,
+                        default=[0, 100],
+                        type="slider",
+                        label="Acceptance Rate (%)"
+                    )
+                ]
             )
 
             gr.Markdown("### Monthly Metrics")
