@@ -654,7 +654,7 @@ def calculate_monthly_metrics(all_metadata, agents):
     """
     # Create mapping from agent_identifier to agent_name
     identifier_to_name = {
-        agent.get('github_identifier'): agent.get('name', agent.get('agent_name', agent.get('github_identifier')))
+        agent.get('github_identifier'): agent.get('name', agent.get('name', agent.get('github_identifier')))
         for agent in agents if agent.get('github_identifier')
     }
 
@@ -755,7 +755,7 @@ def save_leaderboard_and_metrics_to_hf(all_metadata, agents):
 
         for agent in agents:
             identifier = agent.get('github_identifier')
-            agent_name = agent.get('name', agent.get('agent_name', 'Unknown'))
+            agent_name = agent.get('name', 'Unknown')
 
             if not identifier:
                 continue
@@ -764,7 +764,7 @@ def save_leaderboard_and_metrics_to_hf(all_metadata, agents):
             stats = calculate_issue_stats_from_metadata(metadata)
 
             leaderboard_data[identifier] = {
-                'agent_name': agent_name,
+                'name': agent_name,
                 'website': agent.get('website', 'N/A'),
                 'github_identifier': identifier,
                 **stats
@@ -878,7 +878,7 @@ def mine_all_agents():
 
     for i, agent in enumerate(agents, 1):
         identifier = agent.get('github_identifier')
-        agent_name = agent.get('name', agent.get('agent_name', 'Unknown'))
+        agent_name = agent.get('name', 'Unknown')
 
         if not identifier:
             print(f"[{i}/{len(agents)}] Skipping agent without identifier")

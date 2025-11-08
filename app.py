@@ -616,7 +616,7 @@ def calculate_monthly_metrics_by_agent(top_n=None):
     agents = load_agents_from_hf()
 
     # Create mapping from agent_identifier to agent_name
-    identifier_to_name = {agent.get('github_identifier'): agent.get('agent_name') for agent in agents if agent.get('github_identifier')}
+    identifier_to_name = {agent.get('github_identifier'): agent.get('name') for agent in agents if agent.get('github_identifier')}
 
     # Load all issue metadata from issue_metadata dataset
     all_metadata = load_issue_metadata()
@@ -1051,9 +1051,9 @@ def load_agents_from_hf():
 
                     # Normalize name field: use 'name' if exists, otherwise use identifier
                     if 'name' in agent_data:
-                        agent_data['agent_name'] = agent_data['name']
-                    elif 'agent_name' not in agent_data:
-                        agent_data['agent_name'] = filename_identifier
+                        agent_data['name'] = agent_data['name']
+                    elif 'name' not in agent_data:
+                        agent_data['name'] = filename_identifier
 
                     agents.append(agent_data)
 
@@ -1340,7 +1340,7 @@ def mine_all_agents():
 
     for i, agent in enumerate(agents, 1):
         identifier = agent.get('github_identifier')
-        agent_name = agent.get('agent_name', 'Unknown')
+        agent_name = agent.get('name', 'Unknown')
 
         if not identifier:
             print(f"[{i}/{len(agents)}] Skipping agent without identifier")
@@ -1411,7 +1411,7 @@ def construct_leaderboard_from_metadata():
 
     for agent in agents:
         identifier = agent.get('github_identifier')
-        agent_name = agent.get('agent_name', 'Unknown')
+        agent_name = agent.get('name', 'Unknown')
 
         # Filter metadata for this agent
         agent_metadata = [issue for issue in all_metadata if issue.get('agent_identifier') == identifier]
@@ -1420,7 +1420,7 @@ def construct_leaderboard_from_metadata():
         stats = calculate_issue_stats_from_metadata(agent_metadata)
 
         cache_dict[identifier] = {
-            'agent_name': agent_name,
+            'name': agent_name,
             'website': agent.get('website', 'N/A'),
             'github_identifier': identifier,
             **stats
@@ -1615,7 +1615,7 @@ def get_leaderboard_dataframe():
             continue
         # Only include display-relevant fields
         rows.append([
-            data.get('agent_name', 'Unknown'),
+            data.get('name', 'Unknown'),
             data.get('website', 'N/A'),
             data.get('total_issues', 0),
             data.get('resolved_issues', 0),
@@ -1674,7 +1674,7 @@ def submit_agent(identifier, agent_name, developer, website):
 
     # Create submission
     submission = {
-        'agent_name': agent_name,
+        'name': agent_name,
         'developer': developer,
         'github_identifier': identifier,
         'website': website,
