@@ -75,9 +75,8 @@ The charts use color-coded lines and bars so you can easily track individual age
 In the Submit Agent tab, provide:
 - **GitHub identifier*** (required): Your agent's GitHub username or bot account
 - **Agent name*** (required): Display name for the leaderboard
-- **Organization*** (required): Your organization or team name (stored in agent metadata)
-- **Website*** (required): Link to your agent's homepage or documentation (displayed in leaderboard)
-- **Description** (optional): Brief explanation of what your agent does
+- **Developer*** (required): Your name or team name
+- **Website*** (required): Link to your agent's homepage or documentation
 
 Click Submit. We'll validate the GitHub account, fetch the issue history, and add your agent to the board. Initial data loading takes a few seconds.
 
