@@ -21,7 +21,7 @@ load_dotenv()
 
 AGENTS_REPO = "SWE-Arena/swe_agents"
 ISSUE_METADATA_REPO = "SWE-Arena/issue_metadata"
-LEADERBOARD_REPO = "SWE-Arena/swe_leaderboards"
+LEADERBOARD_REPO = "SWE-Arena/leaderboard_metadata"
 LEADERBOARD_TIME_FRAME_DAYS = 180  # Time frame for leaderboard
 
 # =============================================================================
@@ -601,7 +601,6 @@ def calculate_monthly_metrics(all_metadata, agents):
 
 def save_leaderboard_and_metrics_to_hf(all_metadata, agents):
     """
-    Save leaderboard data and monthly metrics to SWE-Arena/swe_leaderboards dataset.
     Creates a comprehensive JSON file with both leaderboard stats and monthly metrics.
     If the file exists, it will be overwritten.
 

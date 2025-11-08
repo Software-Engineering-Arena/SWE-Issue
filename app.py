@@ -950,7 +950,7 @@ def get_hf_token():
 
 def load_cached_leaderboard_and_metrics():
     """
-    Load cached leaderboard and monthly metrics data from SWE-Arena/swe_leaderboards dataset.
+    Load cached leaderboard and monthly metrics data from SWE-Arena/leaderboard_metadata dataset.
     This is much faster than constructing from scratch on every app launch.
 
     Returns:
@@ -968,7 +968,7 @@ def load_cached_leaderboard_and_metrics():
 
         # Download cached file
         cached_path = hf_hub_download(
-            repo_id="SWE-Arena/swe_leaderboards",
+            repo_id="SWE-Arena/leaderboard_metadata",
             filename="swe-issue.json",
             repo_type="dataset",
             token=token
@@ -1079,7 +1079,7 @@ def save_agent_to_hf(data):
 
 def save_leaderboard_and_metrics_to_hf():
     """
-    Save leaderboard data and monthly metrics to SWE-Arena/swe_leaderboards dataset.
+    Save leaderboard data and monthly metrics to SWE-Arena/leaderboard_metadata dataset.
     Creates a comprehensive JSON file with both leaderboard stats and monthly metrics.
     If the file exists, it will be overwritten.
 
@@ -1127,11 +1127,11 @@ def save_leaderboard_and_metrics_to_hf():
         file_like_object = io.BytesIO(json_content.encode('utf-8'))
 
         # Upload to HuggingFace (will overwrite if exists)
-        print(f"\n🤗 Uploading to SWE-Arena/swe_leaderboards...")
+        print(f"\n🤗 Uploading to SWE-Arena/leaderboard_metadata...")
         api.upload_file(
             path_or_fileobj=file_like_object,
             path_in_repo="swe-issue.json",
-            repo_id="SWE-Arena/swe_leaderboards",
+            repo_id="SWE-Arena/leaderboard_metadata",
             repo_type="dataset",
             token=token,
             commit_message=f"Update leaderboard data - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
@@ -1249,7 +1249,7 @@ def mine_all_agents():
     # After mining is complete, save leaderboard and metrics to HuggingFace
     print(f"📤 Uploading leaderboard and metrics data...")
     if save_leaderboard_and_metrics_to_hf():
-        print(f"✓ Leaderboard and metrics successfully uploaded to SWE-Arena/swe_leaderboards")
+        print(f"✓ Leaderboard and metrics successfully uploaded to SWE-Arena/leaderboard_metadata")
     else:
         print(f"⚠️ Failed to upload leaderboard and metrics data")
 
