@@ -162,17 +162,83 @@ def generate_table_union_statements(start_date, end_date):
     return " UNION ALL ".join(union_parts)
 
 
+def fetch_issue_metadata_batched(client, identifiers, start_date, end_date, batch_size=100):
+    """
+    Fetch issue metadata for ALL agents using BATCHED BigQuery queries.
+
+    Splits agents into smaller batches to avoid performance issues with large UNNEST arrays
+    and correlated subqueries. Each batch query runs much faster than one massive query.
+
+    Args:
+        client: BigQuery client instance
+        identifiers: List of GitHub usernames/bot identifiers
+        start_date: Start datetime (timezone-aware)
+        end_date: End datetime (timezone-aware)
+        batch_size: Number of agents per batch (default: 100)
+
+    Returns:
+        Dictionary mapping agent identifier to list of issue metadata
+    """
+    print(f"\n🔍 Querying BigQuery for {len(identifiers)} agents using BATCHED approach")
+    print(f"   Batch size: {batch_size} agents per query")
+
+    # Split identifiers into batches
+    batches = [identifiers[i:i + batch_size] for i in range(0, len(identifiers), batch_size)]
+    print(f"   Total batches: {len(batches)}")
+
+    # Collect results from all batches
+    all_metadata = {}
+
+    for batch_num, batch_identifiers in enumerate(batches, 1):
+        print(f"\n{'─'*80}")
+        print(f"📦 Processing Batch {batch_num}/{len(batches)} ({len(batch_identifiers)} agents)")
+        print(f"{'─'*80}")
+
+        try:
+            batch_results = fetch_all_issue_metadata_single_query(
+                client, batch_identifiers, start_date, end_date
+            )
+
+            # Merge results
+            for identifier, metadata_list in batch_results.items():
+                if identifier in all_metadata:
+                    all_metadata[identifier].extend(metadata_list)
+                else:
+                    all_metadata[identifier] = metadata_list
+
+            print(f"   ✓ Batch {batch_num} completed: {len(batch_results)} agents with data")
+
+        except Exception as e:
+            print(f"   ✗ Batch {batch_num} failed: {str(e)}")
+            print(f"   Continuing with remaining batches...")
+            import traceback
+            traceback.print_exc()
+            continue
+
+    print(f"\n{'='*80}")
+    print(f"✅ All batches completed!")
+    print(f"   Total agents with data: {len(all_metadata)}")
+    total_issues = sum(len(issues) for issues in all_metadata.values())
+    print(f"   Total issues found: {total_issues}")
+    print(f"{'='*80}\n")
+
+    return all_metadata
+
+
 def fetch_all_issue_metadata_single_query(client, identifiers, start_date, end_date):
     """
-    Fetch issue metadata for ALL agents using ONE comprehensive BigQuery query.
+    Fetch issue metadata for a batch of agents using ONE comprehensive BigQuery query.
 
     This query fetches IssuesEvent and IssueCommentEvent from GitHub Archive and
     deduplicates to get the latest state of each issue. Filters by issue author,
     commenter, or assignee.
 
+    NOTE: This function is designed for smaller batches (~100 agents). For large
+    numbers of agents, use fetch_issue_metadata_batched() instead.
+
     Args:
         client: BigQuery client instance
-        identifiers: List of GitHub usernames/bot identifiers
+        identifiers: List of GitHub usernames/bot identifiers (recommended: <100)
         start_date: Start datetime (timezone-aware)
         end_date: End datetime (timezone-aware)
 
@@ -191,7 +257,7 @@ def fetch_all_issue_metadata_single_query(client, identifiers, start_date, end_d
             ...
         }
     """
-    print(f"\n🔍 Querying BigQuery for ALL {len(identifiers)} agents in ONE QUERY")
+    print(f"\n🔍 Querying BigQuery for {len(identifiers)} agents in SINGLE QUERY")
     print(f"   Time range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
 
     # Generate table UNION statements for issue events
@@ -1171,7 +1237,7 @@ def mine_all_agents():
     print(f"\n{'='*80}")
     print(f"⛏️  [MINE] Starting BigQuery data mining for {len(identifiers)} agents")
     print(f"Time frame: Last {LEADERBOARD_TIME_FRAME_DAYS} days")
-    print(f"Data source: BigQuery + GitHub Archive (ONE QUERY FOR ALL AGENTS)")
+    print(f"Data source: BigQuery + GitHub Archive (BATCHED QUERIES)")
     print(f"⚠️  This will query BigQuery and may take several minutes")
     print(f"{'='*80}\n")
 
@@ -1188,8 +1254,9 @@ def mine_all_agents():
     start_date = end_date - timedelta(days=LEADERBOARD_TIME_FRAME_DAYS)
 
     try:
-        all_metadata = fetch_all_issue_metadata_single_query(
-            client, identifiers, start_date, end_date
+        # Use batched approach for better performance
+        all_metadata = fetch_issue_metadata_batched(
+            client, identifiers, start_date, end_date, batch_size=100
         )
     except Exception as e:
         print(f"✗ Error during BigQuery fetch: {str(e)}")
@@ -1237,13 +1304,17 @@ def mine_all_agents():
             error_count += 1
             continue
 
+    # Calculate number of batches executed
+    batch_size = 100
+    num_batches = (len(identifiers) + batch_size - 1) // batch_size
+
     print(f"\n{'='*80}")
     print(f"✅ Mining complete!")
     print(f"   Total agents: {len(agents)}")
     print(f"   Successfully saved: {success_count}")
     print(f"   No data (skipped): {no_data_count}")
     print(f"   Errors: {error_count}")
-    print(f"   BigQuery queries executed: 1")
+    print(f"   BigQuery batches executed: {num_batches} (batch size: {batch_size})")
     print(f"{'='*80}\n")
 
     # After mining is complete, save leaderboard and metrics to HuggingFace
