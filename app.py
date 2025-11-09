@@ -220,7 +220,7 @@ def generate_table_union_statements(start_date, end_date):
     return " UNION ALL ".join(union_parts)
 
 
-def fetch_issue_metadata_batched(client, identifiers, start_date, end_date, batch_size=100):
+def fetch_issue_metadata_batched(client, identifiers, start_date, end_date, batch_size=50):
     """
     Fetch issue metadata for ALL agents using BATCHED BigQuery queries.
 
@@ -232,7 +232,7 @@ def fetch_issue_metadata_batched(client, identifiers, start_date, end_date, batc
         identifiers: List of GitHub usernames/bot identifiers
         start_date: Start datetime (timezone-aware)
         end_date: End datetime (timezone-aware)
-        batch_size: Number of agents per batch (default: 100)
+        batch_size: Number of agents per batch (default: 50)
 
     Returns:
         Dictionary mapping agent identifier to list of issue metadata
@@ -1283,9 +1283,7 @@ def save_leaderboard_and_metrics_to_hf():
 def mine_all_agents():
     """
     Mine issue metadata for all agents within UPDATE_TIME_FRAME_DAYS and save to HuggingFace.
-    Uses ONE BigQuery query for ALL agents (most efficient approach).
-
-    Runs periodically based on UPDATE_TIME_FRAME_DAYS (e.g., weekly).
+    Uses BATCHED BigQuery queries for all agents (efficient approach).
     """
     # Load agent metadata from HuggingFace
     agents = load_agents_from_hf()
@@ -1321,7 +1319,7 @@ def mine_all_agents():
     try:
         # Use batched approach for better performance
         all_metadata = fetch_issue_metadata_batched(
-            client, identifiers, start_date, end_date, batch_size=100
+            client, identifiers, start_date, end_date, batch_size=50
         )
     except Exception as e:
         print(f"✗ Error during BigQuery fetch: {str(e)}")
@@ -1370,7 +1368,7 @@ def mine_all_agents():
             continue
 
     # Calculate number of batches executed
-    batch_size = 100
+    batch_size = 50
     num_batches = (len(identifiers) + batch_size - 1) // batch_size
 
     print(f"\n{'='*80}")
@@ -1441,14 +1439,16 @@ def generate_color(index, total):
     return f'hsl({hue}, {saturation}%, {lightness}%)'
 
 
-def create_monthly_metrics_plot():
+def create_monthly_metrics_plot(top_n=5):
     """
     Create a Plotly figure with dual y-axes showing:
     - Left y-axis: Resolved Rate (%) as line curves
     - Right y-axis: Total Issues created as bar charts
 
     Each agent gets a unique color for both their line and bars.
-    Shows only top 5 agents by total issue count.
+
+    Args:
+        top_n: Number of top agents to show (default: 5)
     """
     # Try to load from cache first
     cached_data = load_cached_leaderboard_and_metrics()
@@ -1457,7 +1457,7 @@ def create_monthly_metrics_plot():
         # Use cached monthly metrics
         all_metrics = cached_data['monthly_metrics']
 
-        # Filter to top 5 agents by total issue count
+        # Filter to top_n agents by total issue count
         if all_metrics.get('agents') and all_metrics.get('data'):
             # Calculate total issues for each agent
             agent_totals = []
@@ -1465,9 +1465,9 @@ def create_monthly_metrics_plot():
                 total_issues = sum(all_metrics['data'][agent_name]['total_issues'])
                 agent_totals.append((agent_name, total_issues))
 
-            # Sort and take top 5
+            # Sort and take top_n agents
             agent_totals.sort(key=lambda x: x[1], reverse=True)
-            top_agents = [agent_name for agent_name, _ in agent_totals[:5]]
+            top_agents = [agent_name for agent_name, _ in agent_totals[:top_n]]
 
             # Filter metrics to only include top agents
             metrics = {
@@ -1480,7 +1480,7 @@ def create_monthly_metrics_plot():
     else:
         # Fallback: Calculate from issue metadata
         print("   Calculating monthly metrics from issue metadata...")
-        metrics = calculate_monthly_metrics_by_agent(top_n=5)
+        metrics = calculate_monthly_metrics_by_agent(top_n=top_n)
 
     if not metrics['agents'] or not metrics['months']:
         # Return an empty figure with a message
@@ -1642,7 +1642,8 @@ def get_leaderboard_dataframe():
 def submit_agent(identifier, agent_name, developer, website):
     """
     Submit a new agent to the leaderboard.
-    Validates input and saves submission. Issue data will be populated by daily incremental updates.
+    Validates input and saves submission.
+    Issue data will be populated by the monthly mining task.
     """
     # Validate required fields
     if not identifier or not identifier.strip():
@@ -1688,29 +1689,26 @@ def submit_agent(identifier, agent_name, developer, website):
 
 
 # =============================================================================
-# BACKGROUND TASKS
-# =============================================================================
-
-
-# =============================================================================
 # GRADIO APPLICATION
 # =============================================================================
 
-# Start APScheduler for periodic issue mining via BigQuery
-# NOTE: On app startup, we only LOAD existing cached data from HuggingFace
-# Mining (BigQuery queries) ONLY happens on schedule (weekly on Mondays)
+print(f"\n🚀 Starting SWE Agent PR Leaderboard")
+print(f"   Leaderboard time frame: {LEADERBOARD_TIME_FRAME_DAYS} days ({LEADERBOARD_TIME_FRAME_DAYS // 30} months)")
+print(f"   Mining update frequency: Every {UPDATE_TIME_FRAME_DAYS} days\n")
+
+# Start APScheduler for monthly PR mining at 12:00 AM UTC every 1st of the month
 scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(
     mine_all_agents,
-    trigger=CronTrigger(day_of_week='mon', hour=0, minute=0),  # Every Monday at 12:00 AM UTC
-    id='periodic_bigquery_mining',
-    name='Periodic BigQuery Issue Mining',
+    trigger=CronTrigger(day=1, hour=0, minute=0),  # 12:00 AM UTC every 1st of the month
+    id='monthly_issue_mining',
+    name='Monthly Issue Mining',
     replace_existing=True
 )
 scheduler.start()
 print(f"\n{'='*80}")
 print(f"✓ Scheduler initialized successfully")
-print(f"⛏️  Mining schedule: Every Monday at 12:00 AM UTC")
+print(f"⛏️  Mining schedule: Every 1st of the month at 12:00 AM UTC")
 print(f"📥 On startup: Only loads cached data from HuggingFace (no mining)")
 print(f"{'='*80}\n")
 
