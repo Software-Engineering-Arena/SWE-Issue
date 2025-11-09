@@ -53,8 +53,10 @@ def is_rate_limit_error(e):
     HfHubHTTPError,
     giveup=lambda e: not is_rate_limit_error(e),
     max_tries=8,
+    base=300,
+    max_value=3600,
     jitter=backoff.full_jitter,
-    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']:.1f}s (attempt {details['tries']}/{8})...")
+    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']/60:.1f} minutes ({details['wait']:.0f}s) - attempt {details['tries']}/{8}...")
 )
 def upload_large_folder_with_backoff(api, **kwargs):
     """Upload large folder with exponential backoff on rate limit errors."""
@@ -65,8 +67,10 @@ def upload_large_folder_with_backoff(api, **kwargs):
     HfHubHTTPError,
     giveup=lambda e: not is_rate_limit_error(e),
     max_tries=8,
+    base=300,
+    max_value=3600,
     jitter=backoff.full_jitter,
-    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']:.1f}s (attempt {details['tries']}/{8})...")
+    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']/60:.1f} minutes ({details['wait']:.0f}s) - attempt {details['tries']}/{8}...")
 )
 def list_repo_files_with_backoff(api, **kwargs):
     """List repo files with exponential backoff on rate limit errors."""
@@ -77,8 +81,10 @@ def list_repo_files_with_backoff(api, **kwargs):
     HfHubHTTPError,
     giveup=lambda e: not is_rate_limit_error(e),
     max_tries=8,
+    base=300,
+    max_value=3600,
     jitter=backoff.full_jitter,
-    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']:.1f}s (attempt {details['tries']}/{8})...")
+    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']/60:.1f} minutes ({details['wait']:.0f}s) - attempt {details['tries']}/{8}...")
 )
 def hf_hub_download_with_backoff(**kwargs):
     """Download from HF Hub with exponential backoff on rate limit errors."""
@@ -89,8 +95,10 @@ def hf_hub_download_with_backoff(**kwargs):
     HfHubHTTPError,
     giveup=lambda e: not is_rate_limit_error(e),
     max_tries=8,
+    base=300,
+    max_value=3600,
     jitter=backoff.full_jitter,
-    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']:.1f}s (attempt {details['tries']}/{8})...")
+    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']/60:.1f} minutes ({details['wait']:.0f}s) - attempt {details['tries']}/{8}...")
 )
 def upload_file_with_backoff(api, **kwargs):
     """Upload file with exponential backoff on rate limit errors."""
