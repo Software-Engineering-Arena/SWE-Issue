@@ -104,6 +104,20 @@ def upload_file_with_backoff(api, **kwargs):
     """Upload file with exponential backoff on rate limit errors."""
     return api.upload_file(**kwargs)
 
+@backoff.on_exception(
+    backoff.expo,
+    HfHubHTTPError,
+    giveup=lambda e: not is_rate_limit_error(e),
+    max_tries=8,
+    base=300,
+    max_value=3600,
+    jitter=backoff.full_jitter,
+    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']/60:.1f} minutes ({details['wait']:.0f}s) - attempt {details['tries']}/{8}...")
+)
+def upload_folder_with_backoff(api, **kwargs):
+    """Upload folder with exponential backoff on rate limit errors."""
+    return api.upload_folder(**kwargs)
+
 # =============================================================================
 # JSONL FILE OPERATIONS
 # =============================================================================
@@ -772,7 +786,7 @@ def save_issue_metadata_to_hf(metadata_list, agent_identifier):
     Each file is stored in the agent's folder and named YYYY.MM.DD.jsonl for that day's issues.
 
     This function uses COMPLETE OVERWRITE strategy (not append/deduplicate).
-    Uses upload_large_folder for optimized batch uploads.
+    Uses upload_folder for single-commit batch uploads (avoids rate limit issues).
 
     Args:
         metadata_list: List of issue metadata dictionaries
@@ -815,14 +829,14 @@ def save_issue_metadata_to_hf(metadata_list, agent_identifier):
             save_jsonl(local_filename, day_metadata)
             print(f"   Prepared {len(day_metadata)} issues for {filename}")
 
-        # Upload entire folder using upload_large_folder (optimized for large files)
-        # Note: upload_large_folder creates multiple commits automatically and doesn't support custom commit_message
+        # Upload entire folder using upload_folder (single commit per agent)
         print(f"🤗 Uploading {len(grouped)} files ({len(metadata_list)} total issues)...")
-        upload_large_folder_with_backoff(
+        upload_folder_with_backoff(
             api,
             folder_path=temp_dir,
             repo_id=ISSUE_METADATA_REPO,
-            repo_type="dataset"
+            repo_type="dataset",
+            commit_message=f"Update issue metadata for {agent_identifier} - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
         print(f"   ✓ Batch upload complete for {agent_identifier}")
 
