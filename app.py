@@ -228,7 +228,7 @@ def generate_table_union_statements(start_date, end_date):
     return " UNION ALL ".join(union_parts)
 
 
-def fetch_issue_metadata_batched(client, identifiers, start_date, end_date, batch_size=50, upload_immediately=True):
+def fetch_issue_metadata_batched(client, identifiers, start_date, end_date, batch_size=100, upload_immediately=True):
     """
     Fetch issue metadata for ALL agents using BATCHED BigQuery queries.
 
@@ -240,7 +240,7 @@ def fetch_issue_metadata_batched(client, identifiers, start_date, end_date, batc
         identifiers: List of GitHub usernames/bot identifiers
         start_date: Start datetime (timezone-aware)
         end_date: End datetime (timezone-aware)
-        batch_size: Number of agents per batch (default: 50)
+        batch_size: Number of agents per batch (default: 100)
         upload_immediately: Upload results to HuggingFace immediately after each batch (default: True)
 
     Returns:
@@ -1065,7 +1065,6 @@ def load_agents_from_hf():
 
                     # Only process agents with status == "public"
                     if agent_data.get('status') != 'public':
-                        print(f"Skipping {json_file}: status is not 'public'")
                         continue
 
                     # Extract github_identifier from filename (e.g., "agent[bot].json" -> "agent[bot]")
@@ -1345,7 +1344,7 @@ def mine_all_agents():
         # Use batched approach for better performance
         # upload_immediately=True means each batch uploads to HuggingFace right after BigQuery completes
         all_metadata = fetch_issue_metadata_batched(
-            client, identifiers, start_date, end_date, batch_size=50, upload_immediately=True
+            client, identifiers, start_date, end_date, batch_size=100, upload_immediately=True
         )
 
         # Calculate summary statistics
