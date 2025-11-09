@@ -34,16 +34,6 @@ def is_rate_limit_error(e):
     """Check if the exception is a rate limit error (429)."""
     return isinstance(e, HfHubHTTPError) and e.response.status_code == 429
 
-@backoff.on_exception(
-    backoff.expo,
-    HfHubHTTPError,
-    giveup=lambda e: not is_rate_limit_error(e),
-    max_tries=8,
-    base=300,
-    max_value=3600,
-    jitter=backoff.full_jitter,
-    on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']/60:.1f} minutes ({details['wait']:.0f}s) - attempt {details['tries']}/{8}...")
-)
 
 @backoff.on_exception(
     backoff.expo,
