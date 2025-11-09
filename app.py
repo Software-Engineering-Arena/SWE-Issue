@@ -58,9 +58,6 @@ def is_rate_limit_error(e):
     jitter=backoff.full_jitter,
     on_backoff=lambda details: print(f"   ⏳ Rate limited. Retrying in {details['wait']/60:.1f} minutes ({details['wait']:.0f}s) - attempt {details['tries']}/{8}...")
 )
-def upload_large_folder_with_backoff(api, **kwargs):
-    """Upload large folder with exponential backoff on rate limit errors."""
-    return api.upload_large_folder(**kwargs)
 
 @backoff.on_exception(
     backoff.expo,
