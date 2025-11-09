@@ -1397,10 +1397,10 @@ def construct_leaderboard_from_metadata():
         agent_name = agent.get('name', 'Unknown')
 
         # Filter metadata for this agent
-        agent_metadata = [issue for issue in all_metadata if issue.get('agent_identifier') == identifier]
+        bot_metadata = [issue for issue in all_metadata if issue.get('agent_identifier') == identifier]
 
         # Calculate stats
-        stats = calculate_issue_stats_from_metadata(agent_metadata)
+        stats = calculate_issue_stats_from_metadata(bot_metadata)
 
         cache_dict[identifier] = {
             'name': agent_name,
